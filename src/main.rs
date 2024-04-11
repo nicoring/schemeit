@@ -1,10 +1,12 @@
+mod env;
+
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 use std::fs;
 use std::io::{self, Write};
 use std::slice::Iter;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum Operation {
     Add,
     Substract,
@@ -62,7 +64,7 @@ impl Operation {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum SymbolicExpression {
     Str(String),
     Symbol(String),
@@ -192,15 +194,19 @@ impl Env {
     }
 
     fn find_symbol_mut(&mut self, symbol: &String) -> &mut SymbolicExpression {
-        self.frame_stack.iter_mut().rev().find_map(|bindings| {
-            bindings.get_mut(symbol)
-        }).unwrap()
+        self.frame_stack
+            .iter_mut()
+            .rev()
+            .find_map(|bindings| bindings.get_mut(symbol))
+            .unwrap()
     }
 
     fn find_symbol(&self, symbol: &String) -> &SymbolicExpression {
-        self.frame_stack.iter().rev().find_map(|bindings| {
-            bindings.get(symbol)
-        }).expect(&format!("Varaiable does not exist: {}", symbol))
+        self.frame_stack
+            .iter()
+            .rev()
+            .find_map(|bindings| bindings.get(symbol))
+            .expect(&format!("Varaiable does not exist: {}", symbol))
     }
 
     fn store_symbol(&mut self, symbol: String, value: SymbolicExpression) {
@@ -553,10 +559,7 @@ fn eval_operation<'a>(
             .collect();
             // let t = Box::from(expression_iter.next().unwrap());
             let body: Box<SymbolicExpression> = Box::new(expression_iter.next().unwrap().clone());
-            SymbolicExpression::Lambda {
-                parameters,
-                body,
-            }
+            SymbolicExpression::Lambda { parameters, body }
         }
     }
 }
@@ -569,10 +572,13 @@ fn eval_lambda(
 ) -> SymbolicExpression {
     env.add_frame();
 
-    parameters.iter().zip(expression_iter).for_each(|(param, expression)| {
-        let value = eval(env, expression);
-        env.store_symbol(param.to_string(), value);
-    });
+    parameters
+        .iter()
+        .zip(expression_iter)
+        .for_each(|(param, expression)| {
+            let value = eval(env, expression);
+            env.store_symbol(param.to_string(), value);
+        });
 
     let result = eval(env, body);
     env.pop_frame();
@@ -588,20 +594,14 @@ fn eval_expression(env: &mut Env, expression: &Vec<SymbolicExpression>) -> Symbo
         SymbolicExpression::Operation(operation) => {
             eval_operation(env, operation, &mut expression_iter)
         }
-        SymbolicExpression::Lambda {
-            parameters,
-            body,
-        } => eval_lambda(
-            env,
-            &parameters,
-            &body,
-            &mut expression_iter,
-        ),
+        SymbolicExpression::Lambda { parameters, body } => {
+            eval_lambda(env, &parameters, &body, &mut expression_iter)
+        }
         _ => panic!("invalid first argument in expression {}", first_expression),
     }
 }
 
-fn eval (env: &mut Env, expression: &SymbolicExpression) -> SymbolicExpression {
+fn eval(env: &mut Env, expression: &SymbolicExpression) -> SymbolicExpression {
     match expression {
         SymbolicExpression::Symbol(name) => env.find_symbol(name).clone(),
         SymbolicExpression::Expression(expression) => eval_expression(env, expression),
