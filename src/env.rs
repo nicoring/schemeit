@@ -7,12 +7,13 @@ use crate::SymbolicExpression;
 type Bindings = HashMap<String, SymbolicExpression>;
 type FrameLink = Rc<RefCell<Frame>>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct Frame {
     bindings: Bindings,
     outer: Option<FrameLink>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct Env {
     current_frame: FrameLink,
 }
@@ -30,10 +31,6 @@ impl Frame {
             bindings: HashMap::new(),
             outer: Some(outer),
         }
-    }
-
-    fn is_global(&self) -> bool {
-        self.outer.is_none()
     }
 
     fn define_symbol(&mut self, symbol: String, value: SymbolicExpression) {
@@ -75,10 +72,6 @@ impl Env {
         Env {
             current_frame: Rc::new(RefCell::new(frame)),
         }
-    }
-
-    pub fn is_global(&self) -> bool {
-        self.current_frame.borrow().is_global()
     }
 
     pub fn add_frame(&mut self) {
@@ -127,7 +120,6 @@ mod test {
     #[test]
     fn global_frame() {
         let mut global_env = Env::new();
-        assert!(global_env.is_global());
 
         let name = "a".to_string();
 

@@ -1,10 +1,12 @@
 mod env;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fmt::Display;
 use std::fs;
 use std::io::{self, Write};
 use std::slice::Iter;
+
+use env::Env;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Operation {
@@ -79,6 +81,7 @@ enum SymbolicExpression {
     Expression(Vec<SymbolicExpression>),
     Lambda {
         parameters: Vec<String>,
+        env: Env,
         body: Box<SymbolicExpression>,
     },
     Operation(Operation),
@@ -169,57 +172,6 @@ fn parse(code: &str) -> SymbolicExpression {
     tokens.pop_front();
     let result = parse_token_list(&mut tokens);
     result
-}
-
-type Bindings = HashMap<String, SymbolicExpression>;
-
-#[derive(Debug)]
-struct Env {
-    frame_stack: Vec<Bindings>,
-}
-
-impl From<Bindings> for Env {
-    fn from(value: Bindings) -> Self {
-        Self {
-            frame_stack: vec![value],
-        }
-    }
-}
-
-impl Env {
-    fn new() -> Self {
-        Self {
-            frame_stack: vec![HashMap::new()],
-        }
-    }
-
-    fn find_symbol_mut(&mut self, symbol: &String) -> &mut SymbolicExpression {
-        self.frame_stack
-            .iter_mut()
-            .rev()
-            .find_map(|bindings| bindings.get_mut(symbol))
-            .unwrap()
-    }
-
-    fn find_symbol(&self, symbol: &String) -> &SymbolicExpression {
-        self.frame_stack
-            .iter()
-            .rev()
-            .find_map(|bindings| bindings.get(symbol))
-            .expect(&format!("Varaiable does not exist: {}", symbol))
-    }
-
-    fn store_symbol(&mut self, symbol: String, value: SymbolicExpression) {
-        self.frame_stack.last_mut().unwrap().insert(symbol, value);
-    }
-
-    fn add_frame(&mut self) {
-        self.frame_stack.push(HashMap::new());
-    }
-
-    fn pop_frame(&mut self) {
-        self.frame_stack.pop();
-    }
 }
 
 fn eval_operation<'a>(
@@ -534,7 +486,7 @@ fn eval_operation<'a>(
                 _ => panic!("Invalid args to define"),
             };
             let value = eval_w_env(expression_iter.next().unwrap());
-            env.store_symbol(name.to_string(), value);
+            env.define_symbol(name, value);
             SymbolicExpression::Nil
         }
         Operation::Set => {
@@ -543,7 +495,7 @@ fn eval_operation<'a>(
                 _ => panic!("Invalid args to set!"),
             };
             let value = eval_w_env(expression_iter.next().unwrap());
-            *env.find_symbol_mut(name) = value;
+            env.set_symbol(name, value);
             SymbolicExpression::Nil
         }
         Operation::Lambda => {
@@ -557,31 +509,36 @@ fn eval_operation<'a>(
                 _ => panic!("invalid arg list for lambda"),
             }
             .collect();
-            // let t = Box::from(expression_iter.next().unwrap());
+
             let body: Box<SymbolicExpression> = Box::new(expression_iter.next().unwrap().clone());
-            SymbolicExpression::Lambda { parameters, body }
+            let lambda_env = env.get_lambda_env();
+            SymbolicExpression::Lambda {
+                parameters,
+                env: lambda_env,
+                body,
+            }
         }
     }
 }
 
 fn eval_lambda(
     env: &mut Env,
+    lambda_env: &mut Env,
     parameters: &Vec<String>,
     body: &SymbolicExpression,
     expression_iter: &mut Iter<'_, SymbolicExpression>,
 ) -> SymbolicExpression {
-    env.add_frame();
-
+    lambda_env.add_frame();
     parameters
         .iter()
         .zip(expression_iter)
         .for_each(|(param, expression)| {
             let value = eval(env, expression);
-            env.store_symbol(param.to_string(), value);
+            lambda_env.define_symbol(param, value);
         });
 
-    let result = eval(env, body);
-    env.pop_frame();
+    let result = eval(lambda_env, body);
+    lambda_env.pop_frame();
     result
 }
 
@@ -594,16 +551,26 @@ fn eval_expression(env: &mut Env, expression: &Vec<SymbolicExpression>) -> Symbo
         SymbolicExpression::Operation(operation) => {
             eval_operation(env, operation, &mut expression_iter)
         }
-        SymbolicExpression::Lambda { parameters, body } => {
-            eval_lambda(env, &parameters, &body, &mut expression_iter)
-        }
+        SymbolicExpression::Lambda {
+            parameters,
+            env: mut lambda_env,
+            body,
+        } => eval_lambda(
+            env,
+            &mut lambda_env,
+            &parameters,
+            &body,
+            &mut expression_iter,
+        ),
         _ => panic!("invalid first argument in expression {}", first_expression),
     }
 }
 
 fn eval(env: &mut Env, expression: &SymbolicExpression) -> SymbolicExpression {
     match expression {
-        SymbolicExpression::Symbol(name) => env.find_symbol(name).clone(),
+        SymbolicExpression::Symbol(name) => env
+            .find_symbol(name)
+            .expect(format!("could not find symbol {}", name).as_str()),
         SymbolicExpression::Expression(expression) => eval_expression(env, expression),
         value => value.clone(),
     }
@@ -648,21 +615,19 @@ fn main() {
 mod tests {
     use super::*;
 
-    fn assert_float(exp: &SymbolicExpression, num: f64) {
-        if let SymbolicExpression::Float(value) = exp {
-            assert!(value == &num, "{} != {}", value, num);
-        } else {
-            panic!("two plus two does not equal four");
-        }
-    }
-
     #[test]
     fn simple_define_function() {
         let mut env = Env::new();
         eval_str(&mut env, "(define pi 3.141592653)");
         eval_str(&mut env, "(define circle-area (lambda (r) (* pi (* r r))))");
-        let result = eval_str(&mut env, "(circle-area 3)");
-        assert_float(&result, 28.274333877);
+        assert_eq!(
+            eval_str(&mut env, "(circle-area 3)"),
+            SymbolicExpression::Float(28.274333877)
+        );
+        assert_eq!(
+            eval_str(&mut env, "(circle-area 3)"),
+            SymbolicExpression::Float(28.274333877)
+        );
     }
 
     #[test]
@@ -679,7 +644,19 @@ mod tests {
         let code = "(define account (make-account 100.00))";
         eval_str(&mut env, code);
         let code = "(account -20.00)";
-        assert_float(&eval_str(&mut env, code), 80.0);
-        assert_float(&eval_str(&mut env, code), 60.0);
+        assert_eq!(eval_str(&mut env, code), SymbolicExpression::Float(80.0));
+        assert_eq!(eval_str(&mut env, code), SymbolicExpression::Float(60.0));
+    }
+
+    #[test]
+    fn fib() {
+        let code =
+            "(define fib (lambda (n) (cond ((< n 2) 1) (#t (+ (fib (- n 1)) (fib (- n 2)))))))";
+        let mut env = Env::new();
+        eval_str(&mut env, code);
+        assert_eq!(eval_str(&mut env, "(fib 0)"), SymbolicExpression::Int(1));
+        assert_eq!(eval_str(&mut env, "(fib 1)"), SymbolicExpression::Int(1));
+        assert_eq!(eval_str(&mut env, "(fib 2)"), SymbolicExpression::Int(2));
+        assert_eq!(eval_str(&mut env, "(fib 9)"), SymbolicExpression::Int(55));
     }
 }
