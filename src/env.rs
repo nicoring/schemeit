@@ -33,11 +33,11 @@ impl Frame {
         }
     }
 
-    fn define_symbol(&mut self, symbol: String, value: SymbolicExpression) {
-        self.bindings.insert(symbol, value);
+    fn define_symbol(&mut self, symbol: &str, value: SymbolicExpression) {
+        self.bindings.insert(symbol.to_owned(), value);
     }
 
-    fn find_symbol(&self, symbol: &String) -> Option<SymbolicExpression> {
+    fn find_symbol(&self, symbol: &str) -> Option<SymbolicExpression> {
         self.bindings.get(symbol).cloned().or_else(|| {
             self.outer
                 .as_ref()
@@ -45,7 +45,7 @@ impl Frame {
         })
     }
 
-    fn set_symbol(&mut self, symbol: &String, new_value: SymbolicExpression) {
+    fn set_symbol(&mut self, symbol: &str, new_value: SymbolicExpression) {
         match self.bindings.get_mut(symbol) {
             Some(value) => {
                 *value = new_value;
@@ -91,18 +91,18 @@ impl Env {
         Env::with_frame(new_frame)
     }
 
-    pub fn find_symbol(&self, symbol: &String) -> Option<SymbolicExpression> {
+    pub fn find_symbol(&self, symbol: &str) -> Option<SymbolicExpression> {
         self.current_frame.borrow().find_symbol(symbol)
     }
 
-    pub fn define_symbol(&mut self, symbol: &String, value: SymbolicExpression) {
+    pub fn define_symbol(&mut self, symbol: &str, value: SymbolicExpression) {
         self.current_frame
             .as_ref()
             .borrow_mut()
-            .define_symbol(symbol.clone(), value);
+            .define_symbol(symbol, value);
     }
 
-    pub fn set_symbol(&mut self, symbol: &String, new_value: SymbolicExpression) {
+    pub fn set_symbol(&mut self, symbol: &str, new_value: SymbolicExpression) {
         self.current_frame
             .as_ref()
             .borrow_mut()
@@ -121,63 +121,63 @@ mod test {
     fn global_frame() {
         let mut global_env = Env::new();
 
-        let name = "a".to_string();
+        let name = "a";
 
-        global_env.define_symbol(&name, SE::Nil);
-        assert_eq!(global_env.find_symbol(&name), Some(SE::Nil));
+        global_env.define_symbol(name, SE::Nil);
+        assert_eq!(global_env.find_symbol(name), Some(SE::Nil));
 
         global_env.set_symbol(&name, SE::Bool(true));
-        assert_eq!(global_env.find_symbol(&name), Some(SE::Bool(true)));
+        assert_eq!(global_env.find_symbol(name), Some(SE::Bool(true)));
     }
 
     #[test]
     fn multiple_frames() {
         let mut env = Env::new();
-        let a = "a".to_string();
-        let b = "b".to_string();
-        let c = "c".to_string();
+        let a = "a";
+        let b = "b";
+        let c = "c";
 
-        env.define_symbol(&a, SE::Nil);
-        assert_eq!(env.find_symbol(&a), Some(SE::Nil));
+        env.define_symbol(a, SE::Nil);
+        assert_eq!(env.find_symbol(a), Some(SE::Nil));
 
-        env.define_symbol(&b, SE::Str("b1".to_string()));
-        assert_eq!(env.find_symbol(&b), Some(SE::Str("b1".to_string())));
+        env.define_symbol(b, SE::Str("b1".to_string()));
+        assert_eq!(env.find_symbol(b), Some(SE::Str("b1".to_string())));
 
         env.add_frame();
 
-        env.define_symbol(&a, SE::Int(2));
-        assert_eq!(env.find_symbol(&a), Some(SE::Int(2)));
+        env.define_symbol(a, SE::Int(2));
+        assert_eq!(env.find_symbol(a), Some(SE::Int(2)));
 
-        env.set_symbol(&b, SE::Str("b2".to_string()));
-        assert_eq!(env.find_symbol(&b), Some(SE::Str("b2".to_string())));
+        env.set_symbol(b, SE::Str("b2".to_string()));
+        assert_eq!(env.find_symbol(b), Some(SE::Str("b2".to_string())));
 
-        env.define_symbol(&c, SE::Str("c".to_string()));
-        assert_eq!(env.find_symbol(&c), Some(SE::Str("c".to_string())));
+        env.define_symbol(c, SE::Str("c".to_string()));
+        assert_eq!(env.find_symbol(c), Some(SE::Str("c".to_string())));
 
         env.pop_frame();
 
-        assert_eq!(env.find_symbol(&a), Some(SE::Nil));
-        assert_eq!(env.find_symbol(&b), Some(SE::Str("b2".to_string())));
-        assert_eq!(env.find_symbol(&c), None);
+        assert_eq!(env.find_symbol(a), Some(SE::Nil));
+        assert_eq!(env.find_symbol(b), Some(SE::Str("b2".to_string())));
+        assert_eq!(env.find_symbol(c), None);
     }
 
     #[test]
     fn lambda_env() {
         let mut env = Env::new();
-        let a = "a".to_string();
+        let a = "a";
 
         env.add_frame();
-        env.define_symbol(&a, SE::Int(1));
+        env.define_symbol(a, SE::Int(1));
 
         let mut lambda_env = env.get_lambda_env();
-        assert_eq!(lambda_env.find_symbol(&a), Some(SE::Int(1)));
+        assert_eq!(lambda_env.find_symbol(a), Some(SE::Int(1)));
 
-        lambda_env.set_symbol(&a, SE::Int(2));
-        assert_eq!(lambda_env.find_symbol(&a), Some(SE::Int(2)));
-        assert_eq!(env.find_symbol(&a), Some(SE::Int(2)));
+        lambda_env.set_symbol(a, SE::Int(2));
+        assert_eq!(lambda_env.find_symbol(a), Some(SE::Int(2)));
+        assert_eq!(env.find_symbol(a), Some(SE::Int(2)));
 
         env.pop_frame();
-        assert_eq!(lambda_env.find_symbol(&a), Some(SE::Int(2)));
-        assert_eq!(env.find_symbol(&a), None);
+        assert_eq!(lambda_env.find_symbol(a), Some(SE::Int(2)));
+        assert_eq!(env.find_symbol(a), None);
     }
 }

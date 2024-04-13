@@ -293,9 +293,7 @@ fn eval_operation<'a>(
             let predicate = eval_w_env(expression_iter.next().unwrap());
             match predicate {
                 SymbolicExpression::Bool(true) => eval_w_env(expression_iter.next().unwrap()),
-                SymbolicExpression::Bool(false) => {
-                    eval_w_env(expression_iter.skip(1).next().unwrap())
-                }
+                SymbolicExpression::Bool(false) => eval_w_env(expression_iter.nth(1).unwrap()),
                 _ => panic!("predicate must evaluate to boolean"),
             }
         }
@@ -333,12 +331,10 @@ fn eval_operation<'a>(
         }
         Operation::Lambda => {
             let parameters = match expression_iter.next().unwrap() {
-                SymbolicExpression::Expression(values) => {
-                    values.iter().map(|each| match each {
-                        SymbolicExpression::Symbol(name) => name.to_owned(),
-                        _ => panic!("non symbol arg in lambda {}", each),
-                    })
-                }
+                SymbolicExpression::Expression(values) => values.iter().map(|each| match each {
+                    SymbolicExpression::Symbol(name) => name.to_owned(),
+                    _ => panic!("non symbol arg in lambda {}", each),
+                }),
                 _ => panic!("invalid arg list for lambda"),
             }
             .collect();
@@ -381,7 +377,7 @@ fn eval_operation<'a>(
 fn eval_lambda<'a>(
     env: &mut Env,
     lambda_env: &mut Env,
-    parameters: &Vec<String>,
+    parameters: &[String],
     body: &SymbolicExpression,
     expression_iter: &mut impl DoubleEndedIterator<Item = &'a SymbolicExpression>,
 ) -> SymbolicExpression {
@@ -399,7 +395,7 @@ fn eval_lambda<'a>(
     result
 }
 
-fn eval_expression(env: &mut Env, expression: &Vec<SymbolicExpression>) -> SymbolicExpression {
+fn eval_expression(env: &mut Env, expression: &[SymbolicExpression]) -> SymbolicExpression {
     let mut expression_iter = expression.iter();
 
     let first_expression = eval(env, expression_iter.next().unwrap());
