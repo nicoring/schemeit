@@ -96,4 +96,11 @@ mod tests {
         assert_eq!(run_str(&mut env, "(fib 2)"), SymbolicExpression::Int(2));
         assert_eq!(run_str(&mut env, "(fib 9)"), SymbolicExpression::Int(55));
     }
+
+    #[test]
+    fn test_let() {
+        let code = "(let ((a 5) (b (+ 5 a))) (+ a b))";
+        let mut env = Env::new();
+        assert_eq!(run_str(&mut env, code), SymbolicExpression::Int(15));
+    }
 }

@@ -103,7 +103,11 @@ fn eval_operation<'a>(
                     SymbolicExpression::Float((first as f64).powf(second))
                 }
                 (SymbolicExpression::Int(first), SymbolicExpression::Int(second)) => {
-                    SymbolicExpression::Int(first.pow(second as u32))
+                    if second < 0 {
+                        SymbolicExpression::Float((first as f64).powi(second as i32))
+                    } else {
+                        SymbolicExpression::Int(first.pow(second as u32))
+                    }
                 }
                 _ => panic!("alarm pow"),
             }
@@ -148,31 +152,31 @@ fn eval_operation<'a>(
             let mut evaluated_arguments = expression_iter.map(eval_w_env);
             let first = evaluated_arguments.next().unwrap();
             SymbolicExpression::Bool(evaluated_arguments.all(|each| {
-                match (&first, &each) {
+                match (&first, each) {
                     (
                         SymbolicExpression::Float(first_value),
                         SymbolicExpression::Float(second_value),
-                    ) => first_value == second_value,
+                    ) => *first_value == second_value,
                     (
                         SymbolicExpression::Float(first_value),
                         SymbolicExpression::Int(second_value),
-                    ) => *first_value == (*second_value as f64),
+                    ) => *first_value == (second_value as f64),
                     (
                         SymbolicExpression::Int(first_value),
                         SymbolicExpression::Float(second_value),
-                    ) => (*first_value as f64) == *second_value,
+                    ) => (*first_value as f64) == second_value,
                     (
                         SymbolicExpression::Int(first_value),
                         SymbolicExpression::Int(second_value),
-                    ) => first_value == second_value,
+                    ) => *first_value == second_value,
                     (
                         SymbolicExpression::Str(first_value),
                         SymbolicExpression::Str(second_value),
-                    ) => first_value == second_value,
+                    ) => *first_value == second_value,
                     (
                         SymbolicExpression::Bool(first_value),
                         SymbolicExpression::Bool(second_value),
-                    ) => first_value == second_value,
+                    ) => *first_value == second_value,
                     // (SymbolicExpression::Cons {head: first_head, tail: first_tail},
                     //     SymbolicExpression::Cons { head: second_head, tail: second_tail})
                     //     => todo!(),
@@ -346,6 +350,30 @@ fn eval_operation<'a>(
                 env: lambda_env,
                 body,
             }
+        }
+        Operation::Let => {
+            // example: (let ((a 5) (b (+ 5 1))) (+ a b))
+            env.add_frame();
+            if let Some(SymbolicExpression::Expression(expression)) = expression_iter.next() {
+                expression.iter().for_each(|each| match each {
+                    SymbolicExpression::Expression(sub_expression) => {
+                        let mut sub_iter = sub_expression.iter();
+                        if let Some(SymbolicExpression::Symbol(name)) = sub_iter.next() {
+                            let exp = sub_iter.next().unwrap();
+                            let value = eval(env, exp);
+                            env.define_symbol(name, value);
+                        } else {
+                            panic!("invalid args for let")
+                        }
+                    }
+                    _ => panic!("invalid args for let"),
+                })
+            } else {
+                panic!("invalid args for let")
+            }
+            let result = eval(env, expression_iter.next().unwrap());
+            env.pop_frame();
+            result
         }
     }
 }

@@ -28,6 +28,7 @@ pub enum Operation {
     Set,
     Lambda,
     Quote,
+    Let,
 }
 
 impl Operation {
@@ -56,6 +57,7 @@ impl Operation {
             "set!" => Some(Operation::Set),
             "lambda" => Some(Operation::Lambda),
             "quote" => Some(Operation::Quote),
+            "let" => Some(Operation::Let),
             _ => None,
         }
     }
