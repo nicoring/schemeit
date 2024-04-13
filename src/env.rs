@@ -38,7 +38,7 @@ impl Frame {
     }
 
     fn find_symbol(&self, symbol: &String) -> Option<SymbolicExpression> {
-        self.bindings.get(symbol).map(|v| v.clone()).or_else(|| {
+        self.bindings.get(symbol).cloned().or_else(|| {
             self.outer
                 .as_ref()
                 .and_then(|outer| outer.borrow().find_symbol(symbol))
@@ -53,7 +53,7 @@ impl Frame {
             None => {
                 self.outer
                     .as_ref()
-                    .expect(format!("should have variable '{}' defined", symbol).as_str())
+                    .unwrap_or_else(|| panic!("should have variable '{}' defined", symbol))
                     .borrow_mut()
                     .set_symbol(symbol, new_value);
             }

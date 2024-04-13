@@ -76,7 +76,7 @@ mod tests {
                   (begin (set! balance (+ balance amt))
                           balance))))
         ";
-        run_str(&mut env, &code);
+        run_str(&mut env, code);
         let code = "(define account (make-account 100.00))";
         run_str(&mut env, code);
         let code = "(account -20.00)";

@@ -334,7 +334,7 @@ fn eval_operation<'a>(
         Operation::Lambda => {
             let parameters = match expression_iter.next().unwrap() {
                 SymbolicExpression::Expression(values) => {
-                    values.into_iter().map(|each| match each {
+                    values.iter().map(|each| match each {
                         SymbolicExpression::Symbol(name) => name.to_owned(),
                         _ => panic!("non symbol arg in lambda {}", each),
                     })
@@ -400,7 +400,7 @@ fn eval_lambda<'a>(
 }
 
 fn eval_expression(env: &mut Env, expression: &Vec<SymbolicExpression>) -> SymbolicExpression {
-    let mut expression_iter = expression.into_iter();
+    let mut expression_iter = expression.iter();
 
     let first_expression = eval(env, expression_iter.next().unwrap());
 
@@ -427,7 +427,7 @@ pub fn eval(env: &mut Env, expression: &SymbolicExpression) -> SymbolicExpressio
     match expression {
         SymbolicExpression::Symbol(name) => env
             .find_symbol(name)
-            .expect(format!("could not find symbol {}", name).as_str()),
+            .unwrap_or_else(|| panic!("could not find symbol {}", name)),
         SymbolicExpression::Expression(expression) => eval_expression(env, expression),
         value => value.clone(),
     }

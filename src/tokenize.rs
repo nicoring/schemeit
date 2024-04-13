@@ -11,8 +11,8 @@ pub enum Token {
 }
 
 pub fn tokenize(code: &str) -> VecDeque<Token> {
-    code.replace("(", " ( ")
-        .replace(")", " ) ")
+    code.replace('(', " ( ")
+        .replace(')', " ) ")
         .split_whitespace()
         .map(|token| match token {
             "(" => Token::LeftParanthesis,
@@ -22,7 +22,7 @@ pub fn tokenize(code: &str) -> VecDeque<Token> {
                     Token::Int(int)
                 } else if let Ok(float) = token.parse::<f64>() {
                     Token::Float(float)
-                } else if token.starts_with("\"") & token.ends_with("\"") {
+                } else if token.starts_with('"') & token.ends_with('"') {
                     Token::String(token.to_string())
                 } else {
                     Token::Symbol(token.to_string())
