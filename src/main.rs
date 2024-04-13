@@ -15,8 +15,7 @@ fn run_str(env: &mut Env, code: &str) -> SymbolicExpression {
     let mut tokens = tokenize(code);
     tokens.pop_front();
     let expression = parse(&mut tokens);
-    let result = eval(env, &expression);
-    result
+    eval(env, &expression)
 }
 
 fn run_file(env: &mut Env, filename: &str) -> SymbolicExpression {
