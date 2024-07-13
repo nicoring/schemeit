@@ -10,6 +10,13 @@
                     acc
                     (map-iter (cons (func (car rest)) acc) (cdr rest))))))
             (map-iter #nil l))))
+    (define reduce (lambda (func l) (if (null? (cdr l)) (car l) (func (car l) (reduce func (cdr l))))))
+    (define reducei (lambda (func l)
+        (let ((reduce-iter (lambda (acc rest)
+                (if (null? rest)
+                    acc
+                    (reduce-iter (func acc (car rest)) (cdr rest))))))
+        (reduce-iter (car l) (cdr l)))))
     (define make-account
       (lambda (balance)
         (lambda (amt)

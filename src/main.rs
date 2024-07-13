@@ -7,6 +7,7 @@ mod tokenize;
 use std::env as std_env;
 use std::fs;
 use std::io::{self, Write};
+use std::time::Instant;
 
 use env::Env;
 use error::Result;
@@ -28,7 +29,7 @@ fn eval_file(env: &mut Env, filename: &str) -> Result<SymbolicExpression> {
 
 fn repl() {
     let mut env = Env::new();
-    eval_file(&mut env, "test.scm").unwrap();
+    eval_file(&mut env, "std.scm").unwrap();
     loop {
         print!("repl> ");
         io::stdout().flush().unwrap();
@@ -53,15 +54,24 @@ fn repl() {
 }
 
 fn benchmark() {
-    let mut env = Env::new();
-    eval_file(&mut env, "test.scm").unwrap();
-    use std::time::Instant;
-    let now = Instant::now();
-    {
-        let _ = eval_str(&mut env, "(fib 30");
+    let code_strings = vec![
+        "(fib 30)",
+        "(reduce + (map (lambda (x) (* x x)) (range 1000)))",
+        "(reducei + (map (lambda (x) (* x x)) (range 1000)))",
+        "(reducei + (mapi (lambda (x) (* x x)) (range 1000)))",
+    ];
+
+    for code_string in code_strings {
+        let mut env = Env::new();
+        eval_file(&mut env, "std.scm").unwrap();
+
+        let now = Instant::now();
+        {
+            let _ = eval_str(&mut env, code_string);
+        }
+        let elapsed = now.elapsed();
+        println!("{} took: {:.2?}", code_string, elapsed);
     }
-    let elapsed = now.elapsed();
-    println!("Elapsed: {:.2?}", elapsed);
 }
 
 fn run_file(filename: &str) {

@@ -271,13 +271,21 @@ fn eval_operation<'a>(
         }
         Operation::Lambda => {
             let parameters = match expression_iter.next().unwrap() {
-                SymbolicExpression::Expression(values) => values.iter().map(|each| match each {
-                    SymbolicExpression::Symbol(name) => name.to_owned(),
-                    _ => panic!("non symbol arg in lambda {}", each),
-                }),
-                _ => panic!("invalid arg list for lambda"),
-            }
-            .collect();
+                SymbolicExpression::Expression(values) => values
+                    .iter()
+                    .map(|each| match each {
+                        SymbolicExpression::Symbol(name) => Ok(name.to_owned()),
+                        _ => Err(InterpreterError::ArgumentError(format!(
+                            "non symbol arg in lambda {}",
+                            each
+                        ))),
+                    })
+                    .collect(),
+                other => Err(InterpreterError::ArgumentError(format!(
+                    "invalid arg definition for lambda: {}",
+                    other,
+                ))),
+            }?;
 
             let body: Box<SymbolicExpression> = Box::new(expression_iter.next().unwrap().clone());
             let lambda_env = env.get_lambda_env();
