@@ -132,7 +132,7 @@ mod tests {
         global_env.define_symbol(name, SE::Nil);
         assert_eq!(global_env.find_symbol(name)?, SE::Nil);
 
-        global_env.set_symbol(&name, SE::Bool(true))?;
+        global_env.set_symbol(name, SE::Bool(true))?;
         assert_eq!(global_env.find_symbol(name)?, SE::Bool(true));
         Ok(())
     }

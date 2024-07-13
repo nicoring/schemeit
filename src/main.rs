@@ -41,7 +41,7 @@ fn repl() {
         if line == "exit" {
             return;
         };
-        if line == "" {
+        if line.is_empty() {
             continue;
         }
         let result = eval_str(&mut env, &line);
