@@ -3,7 +3,7 @@ use crate::tokenize::Token;
 use std::collections::VecDeque;
 use std::fmt::Display;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub enum Operation {
     Add,
     Substract,
@@ -82,6 +82,19 @@ pub enum SymbolicExpression {
         body: Box<SymbolicExpression>,
     },
     Operation(Operation),
+}
+
+impl PartialOrd for SymbolicExpression {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        match (self, other) {
+            (Self::Str(left), Self::Str(right)) => left.partial_cmp(right),
+            (Self::Float(left), Self::Float(right)) => left.partial_cmp(right),
+            (Self::Int(left), Self::Int(right)) => left.partial_cmp(right),
+            (Self::Int(left), Self::Float(right)) => (*left as f64).partial_cmp(right),
+            (Self::Float(left), Self::Int(right)) => left.partial_cmp(&(*right as f64)),
+            _ => None,
+        }
+    }
 }
 
 impl Display for SymbolicExpression {
