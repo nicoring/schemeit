@@ -308,10 +308,16 @@ fn eval_operation<'a>(
                                 let value = eval(env, exp)?;
                                 env.define_symbol(name, value);
                             } else {
-                                panic!("invalid args for let")
+                                return Err(InterpreterError::ArgumentError(
+                                    "invalid args for let".to_string(),
+                                ));
                             }
                         }
-                        _ => panic!("invalid args for let"),
+                        _ => {
+                            return Err(InterpreterError::ArgumentError(
+                                "invalid args for let".to_string(),
+                            ))
+                        }
                     };
                     Result::Ok(())
                 })?

@@ -74,6 +74,15 @@ fn benchmark() {
     }
 }
 
+fn test() {
+    let code = "(mapi (lambda (x) (* x x)) (range 1000))";
+    let mut env = Env::new();
+    eval_file(&mut env, "std.scm").unwrap();
+    let expression = parse(&mut tokenize(code));
+    println!("{}", expression);
+    println!("{}", env.find_symbol("mapi").unwrap());
+}
+
 fn run_file(filename: &str) {
     let mut env = Env::new();
     let result = eval_file(&mut env, filename);
@@ -89,6 +98,8 @@ fn main() {
         repl();
     } else if args[1] == "--benchmark" {
         benchmark();
+    } else if args[1] == "--test" {
+        test();
     } else {
         run_file(args[1].as_str());
     }
