@@ -19,9 +19,6 @@ pub struct Env {
     current_frame: FrameLink,
 }
 
-#[derive(Debug, Clone)]
-pub struct VariableNotFoundError;
-
 impl Frame {
     fn new() -> Self {
         Self {

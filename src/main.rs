@@ -181,4 +181,20 @@ mod tests {
             SymbolicExpression::Int(15)
         );
     }
+
+    #[test]
+    fn tail_recursive_sum() {
+        let mut env = Env::new();
+        // Define tail-recursive sum: sum-iter(n, acc) = if n==0 then acc else sum-iter(n-1, acc+n)
+        eval_str(
+            &mut env,
+            "(define sum-iter (lambda (n acc) (if (= n 0) acc (sum-iter (- n 1) (+ acc n)))))",
+        )
+        .unwrap();
+        // This would stack overflow without TCO
+        assert_eq!(
+            eval_str(&mut env, "(sum-iter 10000 0)").unwrap(),
+            SymbolicExpression::Int(50005000)
+        );
+    }
 }

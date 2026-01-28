@@ -3,7 +3,7 @@ use crate::tokenize::Token;
 use std::collections::VecDeque;
 use std::fmt::Display;
 
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum Operation {
     Add,
     Substract,
@@ -63,6 +63,46 @@ impl Operation {
     }
 }
 
+/// A cons cell with custom Drop to handle deeply nested lists iteratively.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConsCell {
+    pub head: Box<SymbolicExpression>,
+    pub tail: Box<SymbolicExpression>,
+}
+
+impl Drop for ConsCell {
+    fn drop(&mut self) {
+        use std::mem::ManuallyDrop;
+
+        // Iteratively drop the tail chain to prevent stack overflow.
+        // We use ManuallyDrop to prevent recursive Drop calls on inner ConsCells.
+        let mut current = std::mem::replace(&mut self.tail, Box::new(SymbolicExpression::Nil));
+
+        loop {
+            // Take the value out of the box
+            let inner = std::mem::replace(&mut *current, SymbolicExpression::Nil);
+
+            match inner {
+                SymbolicExpression::Cons(cell) => {
+                    // Wrap in ManuallyDrop to prevent automatic Drop
+                    let cell = ManuallyDrop::new(cell);
+                    // SAFETY: We're manually handling the drop of cell's fields.
+                    // After this, cell is left in an undefined state but won't be dropped.
+                    unsafe {
+                        // Read and drop head
+                        let head = std::ptr::read(&cell.head);
+                        drop(head);
+                        // Read tail for next iteration
+                        current = std::ptr::read(&cell.tail);
+                    }
+                    // cell is ManuallyDrop, so no Drop is triggered
+                }
+                _ => break, // Not a Cons, done
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SymbolicExpression {
     Str(String),
@@ -70,10 +110,7 @@ pub enum SymbolicExpression {
     Float(f64),
     Int(i128),
     Bool(bool),
-    Cons {
-        head: Box<SymbolicExpression>,
-        tail: Box<SymbolicExpression>,
-    },
+    Cons(ConsCell),
     Nil,
     Expression(Vec<SymbolicExpression>),
     Lambda {
@@ -103,7 +140,7 @@ impl Display for SymbolicExpression {
             Self::Float(value) => write!(f, "{}", value),
             Self::Int(value) => write!(f, "{}", value),
             Self::Str(value) => write!(f, "{}", value),
-            Self::Cons { head, tail } => write!(f, "({} . {})", head, tail),
+            Self::Cons(ConsCell { head, tail }) => write!(f, "({} . {})", head, tail),
             Self::Symbol(value) => write!(f, "#{}", value),
             Self::Bool(value) => write!(f, "{}", if *value { "#t" } else { "#f" }),
             Self::Nil => write!(f, "#nil"),

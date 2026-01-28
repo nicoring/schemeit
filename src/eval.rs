@@ -1,8 +1,81 @@
 use crate::{
     env::Env,
     error::{InterpreterError, Result},
-    parse::{Operation, SymbolicExpression},
+    parse::{ConsCell, Operation, SymbolicExpression},
 };
+
+/// A continuation frame - represents pending work waiting for a value
+#[derive(Clone)]
+enum Continuation {
+    /// Evaluating arguments for an operation
+    OpArgs {
+        env: Env,
+        op: Operation,
+        evaluated: Vec<SymbolicExpression>,
+        remaining: Vec<SymbolicExpression>,
+    },
+    /// Evaluating arguments for a lambda call
+    LambdaArgs {
+        caller_env: Env,
+        lambda_env: Env,
+        parameters: Vec<String>,
+        body: SymbolicExpression,
+        evaluated: Vec<SymbolicExpression>,
+        remaining: Vec<SymbolicExpression>,
+    },
+    /// Evaluating the function position of an application
+    ApplyFunc {
+        env: Env,
+        args: Vec<SymbolicExpression>,
+    },
+    /// Evaluating let bindings
+    LetBindings {
+        env: Env,
+        current_name: String,
+        remaining_bindings: Vec<(String, SymbolicExpression)>,
+        body: SymbolicExpression,
+    },
+    /// Evaluating expressions in begin (non-tail)
+    BeginExprs {
+        env: Env,
+        remaining: Vec<SymbolicExpression>,
+    },
+    /// Evaluating expressions in module
+    ModuleExprs {
+        env: Env,
+        remaining: Vec<SymbolicExpression>,
+    },
+    /// Define: waiting for value
+    Define {
+        env: Env,
+        name: String,
+    },
+    /// Set!: waiting for value
+    Set {
+        env: Env,
+        name: String,
+    },
+    /// If: waiting for predicate
+    IfPredicate {
+        env: Env,
+        then_branch: SymbolicExpression,
+        else_branch: SymbolicExpression,
+    },
+    /// Cond: waiting for current predicate
+    CondPredicate {
+        env: Env,
+        current_body: SymbolicExpression,
+        remaining_clauses: Vec<(SymbolicExpression, SymbolicExpression)>,
+    },
+}
+
+/// What the evaluator should do next
+enum Control {
+    /// Evaluate this expression
+    Eval { env: Env, expr: SymbolicExpression },
+    /// Apply a value to the top continuation
+    ApplyValue(SymbolicExpression),
+}
 
 fn eval_comparison_operation(
     evaluated_arguments: Vec<SymbolicExpression>,
@@ -20,365 +93,651 @@ fn eval_comparison_operation(
     SymbolicExpression::Bool(true)
 }
 
-fn eval_operation<'a>(
-    env: &mut Env,
-    operation: Operation,
-    expression_iter: &mut impl DoubleEndedIterator<Item = &'a SymbolicExpression>,
-) -> Result<SymbolicExpression> {
-    let mut eval_w_env = |expression| eval(env, expression);
-
-    match operation {
-        Operation::Add => expression_iter
-            .map(eval_w_env)
-            .reduce(|acc, elem| match (acc?, elem?) {
-                (SymbolicExpression::Float(acc_value), SymbolicExpression::Float(elem_value)) => {
-                    Ok(SymbolicExpression::Float(acc_value + elem_value))
+/// Apply a completed operation with all arguments evaluated
+fn apply_operation(op: Operation, args: Vec<SymbolicExpression>) -> Result<SymbolicExpression> {
+    match op {
+        Operation::Add => args
+            .into_iter()
+            .reduce(|acc, elem| match (acc, elem) {
+                (SymbolicExpression::Float(a), SymbolicExpression::Float(b)) => {
+                    SymbolicExpression::Float(a + b)
                 }
-                (SymbolicExpression::Float(acc_value), SymbolicExpression::Int(elem_value)) => {
-                    Ok(SymbolicExpression::Float(acc_value + elem_value as f64))
+                (SymbolicExpression::Float(a), SymbolicExpression::Int(b)) => {
+                    SymbolicExpression::Float(a + b as f64)
                 }
-                (SymbolicExpression::Int(acc_value), SymbolicExpression::Float(elem_value)) => {
-                    Ok(SymbolicExpression::Float(acc_value as f64 + elem_value))
+                (SymbolicExpression::Int(a), SymbolicExpression::Float(b)) => {
+                    SymbolicExpression::Float(a as f64 + b)
                 }
-                (SymbolicExpression::Int(acc_value), SymbolicExpression::Int(elem_value)) => {
-                    Ok(SymbolicExpression::Int(acc_value + elem_value))
+                (SymbolicExpression::Int(a), SymbolicExpression::Int(b)) => {
+                    SymbolicExpression::Int(a + b)
                 }
-                _ => Err(InterpreterError::ValueError("wrong type for +".into())),
+                _ => SymbolicExpression::Nil, // Error case, will be caught
             })
-            .unwrap(),
-        Operation::Substract => expression_iter
-            .map(eval_w_env)
-            .reduce(|acc, elem| match (acc?, elem?) {
-                (SymbolicExpression::Float(acc_value), SymbolicExpression::Float(elem_value)) => {
-                    Ok(SymbolicExpression::Float(acc_value - elem_value))
+            .ok_or_else(|| InterpreterError::ArgumentError("+ requires arguments".into())),
+        Operation::Substract => args
+            .into_iter()
+            .reduce(|acc, elem| match (acc, elem) {
+                (SymbolicExpression::Float(a), SymbolicExpression::Float(b)) => {
+                    SymbolicExpression::Float(a - b)
                 }
-                (SymbolicExpression::Float(acc_value), SymbolicExpression::Int(elem_value)) => {
-                    Ok(SymbolicExpression::Float(acc_value - elem_value as f64))
+                (SymbolicExpression::Float(a), SymbolicExpression::Int(b)) => {
+                    SymbolicExpression::Float(a - b as f64)
                 }
-                (SymbolicExpression::Int(acc_value), SymbolicExpression::Float(elem_value)) => {
-                    Ok(SymbolicExpression::Float(acc_value as f64 - elem_value))
+                (SymbolicExpression::Int(a), SymbolicExpression::Float(b)) => {
+                    SymbolicExpression::Float(a as f64 - b)
                 }
-                (SymbolicExpression::Int(acc_value), SymbolicExpression::Int(elem_value)) => {
-                    Ok(SymbolicExpression::Int(acc_value - elem_value))
+                (SymbolicExpression::Int(a), SymbolicExpression::Int(b)) => {
+                    SymbolicExpression::Int(a - b)
                 }
-                _ => Err(InterpreterError::ValueError("wrong type for -".into())),
+                _ => SymbolicExpression::Nil,
             })
-            .unwrap(),
-        Operation::Multiply => expression_iter
-            .map(eval_w_env)
-            .reduce(|acc, elem| match (acc?, elem?) {
-                (SymbolicExpression::Float(acc_value), SymbolicExpression::Float(elem_value)) => {
-                    Ok(SymbolicExpression::Float(acc_value * elem_value))
+            .ok_or_else(|| InterpreterError::ArgumentError("- requires arguments".into())),
+        Operation::Multiply => args
+            .into_iter()
+            .reduce(|acc, elem| match (acc, elem) {
+                (SymbolicExpression::Float(a), SymbolicExpression::Float(b)) => {
+                    SymbolicExpression::Float(a * b)
                 }
-                (SymbolicExpression::Float(acc_value), SymbolicExpression::Int(elem_value)) => {
-                    Ok(SymbolicExpression::Float(acc_value * elem_value as f64))
+                (SymbolicExpression::Float(a), SymbolicExpression::Int(b)) => {
+                    SymbolicExpression::Float(a * b as f64)
                 }
-                (SymbolicExpression::Int(acc_value), SymbolicExpression::Float(elem_value)) => {
-                    Ok(SymbolicExpression::Float(acc_value as f64 * elem_value))
+                (SymbolicExpression::Int(a), SymbolicExpression::Float(b)) => {
+                    SymbolicExpression::Float(a as f64 * b)
                 }
-                (SymbolicExpression::Int(acc_value), SymbolicExpression::Int(elem_value)) => {
-                    Ok(SymbolicExpression::Int(acc_value * elem_value))
+                (SymbolicExpression::Int(a), SymbolicExpression::Int(b)) => {
+                    SymbolicExpression::Int(a * b)
                 }
-                _ => Err(InterpreterError::ValueError("wrong type for *".into())),
+                _ => SymbolicExpression::Nil,
             })
-            .unwrap(),
-        Operation::Divide => expression_iter
-            .map(eval_w_env)
-            .reduce(|acc, elem| match (acc?, elem?) {
-                (SymbolicExpression::Float(acc_value), SymbolicExpression::Float(elem_value)) => {
-                    Ok(SymbolicExpression::Float(acc_value / elem_value))
+            .ok_or_else(|| InterpreterError::ArgumentError("* requires arguments".into())),
+        Operation::Divide => args
+            .into_iter()
+            .reduce(|acc, elem| match (acc, elem) {
+                (SymbolicExpression::Float(a), SymbolicExpression::Float(b)) => {
+                    SymbolicExpression::Float(a / b)
                 }
-                (SymbolicExpression::Float(acc_value), SymbolicExpression::Int(elem_value)) => {
-                    Ok(SymbolicExpression::Float(acc_value / elem_value as f64))
+                (SymbolicExpression::Float(a), SymbolicExpression::Int(b)) => {
+                    SymbolicExpression::Float(a / b as f64)
                 }
-                (SymbolicExpression::Int(acc_value), SymbolicExpression::Float(elem_value)) => {
-                    Ok(SymbolicExpression::Float(acc_value as f64 / elem_value))
+                (SymbolicExpression::Int(a), SymbolicExpression::Float(b)) => {
+                    SymbolicExpression::Float(a as f64 / b)
                 }
-                (SymbolicExpression::Int(acc_value), SymbolicExpression::Int(elem_value)) => Ok(
-                    SymbolicExpression::Float(acc_value as f64 / elem_value as f64),
-                ),
-                _ => Err(InterpreterError::ValueError("wrong types for /".into())),
+                (SymbolicExpression::Int(a), SymbolicExpression::Int(b)) => {
+                    SymbolicExpression::Float(a as f64 / b as f64)
+                }
+                _ => SymbolicExpression::Nil,
             })
-            .unwrap(),
-        Operation::Exp => match expression_iter.map(eval_w_env).next().unwrap()? {
-            SymbolicExpression::Float(value) => Ok(SymbolicExpression::Float(value.exp())),
-            SymbolicExpression::Int(value) => Ok(SymbolicExpression::Float((value as f64).exp())),
-            value => Err(InterpreterError::RuntimeError(
-                format!("exp on {}", value).to_string(),
-            )),
+            .ok_or_else(|| InterpreterError::ArgumentError("/ requires arguments".into())),
+        Operation::Exp => match &args[0] {
+            SymbolicExpression::Float(v) => Ok(SymbolicExpression::Float(v.exp())),
+            SymbolicExpression::Int(v) => Ok(SymbolicExpression::Float((*v as f64).exp())),
+            _ => Err(InterpreterError::ValueError("exp requires number".into())),
         },
         Operation::Pow => {
-            let mut evaluated_arguments = expression_iter.map(eval_w_env);
-            let value_first = evaluated_arguments.next().unwrap()?;
-            let value_second = evaluated_arguments.next().unwrap()?;
-            match (value_first, value_second) {
-                (SymbolicExpression::Float(first), SymbolicExpression::Float(second)) => {
-                    Ok(SymbolicExpression::Float(first.powf(second)))
+            let (first, second) = (&args[0], &args[1]);
+            match (first, second) {
+                (SymbolicExpression::Float(a), SymbolicExpression::Float(b)) => {
+                    Ok(SymbolicExpression::Float(a.powf(*b)))
                 }
-                (SymbolicExpression::Float(first), SymbolicExpression::Int(second)) => {
-                    Ok(SymbolicExpression::Float(first.powi(second as i32)))
+                (SymbolicExpression::Float(a), SymbolicExpression::Int(b)) => {
+                    Ok(SymbolicExpression::Float(a.powi(*b as i32)))
                 }
-                (SymbolicExpression::Int(first), SymbolicExpression::Float(second)) => {
-                    Ok(SymbolicExpression::Float((first as f64).powf(second)))
+                (SymbolicExpression::Int(a), SymbolicExpression::Float(b)) => {
+                    Ok(SymbolicExpression::Float((*a as f64).powf(*b)))
                 }
-                (SymbolicExpression::Int(first), SymbolicExpression::Int(second)) => {
-                    if second < 0 {
-                        Ok(SymbolicExpression::Float(
-                            (first as f64).powi(second as i32),
-                        ))
+                (SymbolicExpression::Int(a), SymbolicExpression::Int(b)) => {
+                    if *b < 0 {
+                        Ok(SymbolicExpression::Float((*a as f64).powi(*b as i32)))
                     } else {
-                        Ok(SymbolicExpression::Int(first.pow(second as u32)))
+                        Ok(SymbolicExpression::Int(a.pow(*b as u32)))
                     }
                 }
-                _ => Err(InterpreterError::ValueError("wrong types for pow".into())),
+                _ => Err(InterpreterError::ValueError("pow requires numbers".into())),
             }
-        }
-        Operation::Begin => {
-            env.add_frame();
-            let result = expression_iter
-                .map(|el| eval(env, el))
-                .try_fold(SymbolicExpression::Nil, |_, res| res);
-            env.pop_frame();
-            result
-        }
-        Operation::Module => {
-            expression_iter.try_for_each(|el| eval_w_env(el).map(|_| ()))?;
-            Ok(SymbolicExpression::Nil)
         }
         Operation::Cons => {
-            let mut args = expression_iter.map(eval_w_env);
-            let head = Box::new(args.next().unwrap()?);
-            let tail = Box::new(args.next().unwrap()?);
-            Ok(SymbolicExpression::Cons { head, tail })
+            let head = Box::new(args[0].clone());
+            let tail = Box::new(args[1].clone());
+            Ok(SymbolicExpression::Cons(ConsCell { head, tail }))
         }
         Operation::List => {
-            expression_iter
-                .map(eval_w_env)
-                .try_rfold(SymbolicExpression::Nil, |acc, elem| {
-                    Ok(SymbolicExpression::Cons {
-                        head: Box::new(elem?),
+            let result = args
+                .into_iter()
+                .rev()
+                .fold(SymbolicExpression::Nil, |acc, elem| {
+                    SymbolicExpression::Cons(ConsCell {
+                        head: Box::new(elem),
                         tail: Box::new(acc),
                     })
-                })
+                });
+            Ok(result)
         }
-        Operation::Car => match expression_iter.map(eval_w_env).next().unwrap()? {
-            SymbolicExpression::Cons { head, .. } => Ok(*head),
-            _ => panic!("car on non cons type"),
+        Operation::Car => match &args[0] {
+            SymbolicExpression::Cons(ConsCell { ref head, .. }) => Ok((**head).clone()),
+            _ => Err(InterpreterError::ValueError("car on non-cons".into())),
         },
-        Operation::Cdr => match expression_iter.map(eval_w_env).next().unwrap()? {
-            SymbolicExpression::Cons { tail, .. } => Ok(*tail),
-            _ => panic!("car on non cons type"),
+        Operation::Cdr => match &args[0] {
+            SymbolicExpression::Cons(ConsCell { ref tail, .. }) => Ok((**tail).clone()),
+            _ => Err(InterpreterError::ValueError("cdr on non-cons".into())),
         },
-        Operation::Eq => Ok(eval_comparison_operation(
-            expression_iter
-                .map(eval_w_env)
-                .collect::<Result<Vec<SymbolicExpression>>>()?,
-            |left, right| left == right,
-        )),
-        Operation::Smaller => Ok(eval_comparison_operation(
-            expression_iter
-                .map(eval_w_env)
-                .collect::<Result<Vec<SymbolicExpression>>>()?,
-            |left, right| left < right,
-        )),
-        Operation::SmallerOrEqual => Ok(eval_comparison_operation(
-            expression_iter
-                .map(eval_w_env)
-                .collect::<Result<Vec<SymbolicExpression>>>()?,
-            |left, right| left <= right,
-        )),
-        Operation::Greater => Ok(eval_comparison_operation(
-            expression_iter
-                .map(eval_w_env)
-                .collect::<Result<Vec<SymbolicExpression>>>()?,
-            |left, right| left > right,
-        )),
-        Operation::GreaterOrEqual => Ok(eval_comparison_operation(
-            expression_iter
-                .map(eval_w_env)
-                .collect::<Result<Vec<SymbolicExpression>>>()?,
-            |left, right| left >= right,
-        )),
-        Operation::If => {
-            let predicate = eval_w_env(expression_iter.next().unwrap())?;
-            match predicate {
-                SymbolicExpression::Bool(true) => eval_w_env(expression_iter.next().unwrap()),
-                SymbolicExpression::Bool(false) => eval_w_env(expression_iter.nth(1).unwrap()),
-                _ => Err(InterpreterError::ValueError(
-                    "predicate must evaluate to boolean".into(),
-                )),
-            }
-        }
-        Operation::Cond => expression_iter
-            .find_map(|expression| match expression {
-                SymbolicExpression::Expression(values) => {
-                    let predicate = eval_w_env(&values[0]);
-                    match predicate {
-                        Ok(SymbolicExpression::Bool(true)) => Some(eval_w_env(&values[1])),
-                        Ok(SymbolicExpression::Bool(false)) => None,
-                        err if err.is_err() => Some(err),
-                        _ => Some(Err(InterpreterError::ValueError(
-                            "predicate must evaluate to boolean".into(),
-                        ))),
-                    }
-                }
-                _ => Some(Err(InterpreterError::ArgumentError(
-                    "invalid argument to cond".into(),
-                ))),
-            })
-            .unwrap_or(Err(InterpreterError::RuntimeError(
-                "cond all predicate false".into(),
-            ))),
-        Operation::Quote => expression_iter
-            .next()
-            .ok_or(InterpreterError::ArgumentError("missing arguments".into()))
-            .cloned(),
-        Operation::Define => {
-            let name = match expression_iter.next() {
-                Some(SymbolicExpression::Symbol(value)) => value,
-                _ => {
-                    return Err(InterpreterError::ArgumentError(
-                        "first argument to define has to be symbol".into(),
-                    ))
-                }
-            };
-            let value_exp = expression_iter
-                .next()
-                .ok_or(InterpreterError::ArgumentError(
-                    "empty arguments for define".into(),
-                ))?;
-            let value = eval_w_env(value_exp)?;
-            env.define_symbol(name, value);
-            Ok(SymbolicExpression::Nil)
-        }
-        Operation::Set => {
-            let name = match expression_iter.next() {
-                Some(SymbolicExpression::Symbol(value)) => value,
-                _ => {
-                    return Err(InterpreterError::ArgumentError(
-                        "first argument to set! has to be symbol".into(),
-                    ))
-                }
-            };
-            let value_exp = expression_iter
-                .next()
-                .ok_or(InterpreterError::ArgumentError(
-                    "empty arguments for set!".into(),
-                ))?;
-            let value = eval_w_env(value_exp)?;
-            env.set_symbol(name, value)?;
-            Ok(SymbolicExpression::Nil)
-        }
-        Operation::Lambda => {
-            let parameters = match expression_iter.next().unwrap() {
-                SymbolicExpression::Expression(values) => values
-                    .iter()
-                    .map(|each| match each {
-                        SymbolicExpression::Symbol(name) => Ok(name.to_owned()),
-                        _ => Err(InterpreterError::ArgumentError(format!(
-                            "non symbol arg in lambda {}",
-                            each
-                        ))),
-                    })
-                    .collect(),
-                other => Err(InterpreterError::ArgumentError(format!(
-                    "invalid arg definition for lambda: {}",
-                    other,
-                ))),
-            }?;
+        Operation::Eq => Ok(eval_comparison_operation(args, |a, b| a == b)),
+        Operation::Smaller => Ok(eval_comparison_operation(args, |a, b| a < b)),
+        Operation::SmallerOrEqual => Ok(eval_comparison_operation(args, |a, b| a <= b)),
+        Operation::Greater => Ok(eval_comparison_operation(args, |a, b| a > b)),
+        Operation::GreaterOrEqual => Ok(eval_comparison_operation(args, |a, b| a >= b)),
+        // These are handled specially, shouldn't reach here
+        Operation::If
+        | Operation::Cond
+        | Operation::Define
+        | Operation::Set
+        | Operation::Lambda
+        | Operation::Let
+        | Operation::Begin
+        | Operation::Module
+        | Operation::Quote => unreachable!("special form in apply_operation"),
+    }
+}
 
-            let body: Box<SymbolicExpression> = Box::new(expression_iter.next().unwrap().clone());
-            let lambda_env = env.get_lambda_env();
-            Ok(SymbolicExpression::Lambda {
-                parameters,
-                env: lambda_env,
-                body,
-            })
-        }
-        Operation::Let => {
-            // example: (let ((a 5) (b (+ 5 1))) (+ a b))
-            env.add_frame();
-            if let Some(SymbolicExpression::Expression(expression)) = expression_iter.next() {
-                expression.iter().try_for_each(|each| {
-                    match each {
-                        SymbolicExpression::Expression(sub_expression) => {
-                            let mut sub_iter = sub_expression.iter();
-                            if let Some(SymbolicExpression::Symbol(name)) = sub_iter.next() {
-                                let exp = sub_iter.next().unwrap();
-                                let value = eval(env, exp)?;
-                                env.define_symbol(name, value);
-                            } else {
+/// Main evaluation loop with explicit continuation stack
+pub fn eval(env: &mut Env, expression: &SymbolicExpression) -> Result<SymbolicExpression> {
+    let mut stack: Vec<Continuation> = Vec::new();
+    let mut control = Control::Eval {
+        env: env.clone(),
+        expr: expression.clone(),
+    };
+
+    loop {
+        control = match control {
+            Control::Eval { mut env, expr } => match expr {
+                // Self-evaluating forms
+                SymbolicExpression::Int(_)
+                | SymbolicExpression::Float(_)
+                | SymbolicExpression::Bool(_)
+                | SymbolicExpression::Nil
+                | SymbolicExpression::Str(_)
+                | SymbolicExpression::Cons(_)
+                | SymbolicExpression::Lambda { .. }
+                | SymbolicExpression::Operation(_) => Control::ApplyValue(expr),
+
+                // Symbol lookup
+                SymbolicExpression::Symbol(name) => {
+                    let value = env.find_symbol(&name)?;
+                    Control::ApplyValue(value)
+                }
+
+                // Expression (function application or special form)
+                SymbolicExpression::Expression(exprs) => {
+                    if exprs.is_empty() {
+                        return Err(InterpreterError::SyntaxError(SymbolicExpression::Nil));
+                    }
+
+                    let first = &exprs[0];
+                    let args: Vec<_> = exprs[1..].to_vec();
+
+                    // Check for special forms
+                    match first {
+                        SymbolicExpression::Operation(Operation::Quote) => {
+                            if args.is_empty() {
                                 return Err(InterpreterError::ArgumentError(
-                                    "invalid args for let".to_string(),
+                                    "quote requires argument".into(),
                                 ));
                             }
+                            Control::ApplyValue(args[0].clone())
                         }
+                        SymbolicExpression::Operation(Operation::Define) => {
+                            let name = match &args[0] {
+                                SymbolicExpression::Symbol(s) => s.clone(),
+                                _ => {
+                                    return Err(InterpreterError::ArgumentError(
+                                        "define requires symbol".into(),
+                                    ))
+                                }
+                            };
+                            stack.push(Continuation::Define {
+                                env: env.clone(),
+                                name,
+                            });
+                            Control::Eval {
+                                env,
+                                expr: args[1].clone(),
+                            }
+                        }
+                        SymbolicExpression::Operation(Operation::Set) => {
+                            let name = match &args[0] {
+                                SymbolicExpression::Symbol(s) => s.clone(),
+                                _ => {
+                                    return Err(InterpreterError::ArgumentError(
+                                        "set! requires symbol".into(),
+                                    ))
+                                }
+                            };
+                            stack.push(Continuation::Set {
+                                env: env.clone(),
+                                name,
+                            });
+                            Control::Eval {
+                                env,
+                                expr: args[1].clone(),
+                            }
+                        }
+                        SymbolicExpression::Operation(Operation::If) => {
+                            if args.len() < 3 {
+                                return Err(InterpreterError::ArgumentError(
+                                    "if requires 3 arguments".into(),
+                                ));
+                            }
+                            stack.push(Continuation::IfPredicate {
+                                env: env.clone(),
+                                then_branch: args[1].clone(),
+                                else_branch: args[2].clone(),
+                            });
+                            Control::Eval {
+                                env,
+                                expr: args[0].clone(),
+                            }
+                        }
+                        SymbolicExpression::Operation(Operation::Cond) => {
+                            if args.is_empty() {
+                                return Err(InterpreterError::RuntimeError(
+                                    "cond requires clauses".into(),
+                                ));
+                            }
+                            // Parse all clauses
+                            let mut clauses = Vec::new();
+                            for arg in &args {
+                                match arg {
+                                    SymbolicExpression::Expression(clause) if clause.len() >= 2 => {
+                                        clauses.push((clause[0].clone(), clause[1].clone()));
+                                    }
+                                    _ => {
+                                        return Err(InterpreterError::ArgumentError(
+                                            "invalid cond clause".into(),
+                                        ))
+                                    }
+                                }
+                            }
+                            let (pred, body) = clauses.remove(0);
+                            stack.push(Continuation::CondPredicate {
+                                env: env.clone(),
+                                current_body: body,
+                                remaining_clauses: clauses,
+                            });
+                            Control::Eval { env, expr: pred }
+                        }
+                        SymbolicExpression::Operation(Operation::Lambda) => {
+                            let parameters = match &args[0] {
+                                SymbolicExpression::Expression(params) => params
+                                    .iter()
+                                    .map(|p| match p {
+                                        SymbolicExpression::Symbol(s) => Ok(s.clone()),
+                                        _ => Err(InterpreterError::ArgumentError(
+                                            "lambda param must be symbol".into(),
+                                        )),
+                                    })
+                                    .collect::<Result<Vec<_>>>()?,
+                                _ => {
+                                    return Err(InterpreterError::ArgumentError(
+                                        "lambda requires parameter list".into(),
+                                    ))
+                                }
+                            };
+                            let body = args[1].clone();
+                            let lambda_env = env.get_lambda_env();
+                            Control::ApplyValue(SymbolicExpression::Lambda {
+                                parameters,
+                                env: lambda_env,
+                                body: Box::new(body),
+                            })
+                        }
+                        SymbolicExpression::Operation(Operation::Let) => {
+                            // (let ((a 1) (b 2)) body)
+                            env.add_frame();
+                            let bindings = match &args[0] {
+                                SymbolicExpression::Expression(bs) => bs
+                                    .iter()
+                                    .map(|b| match b {
+                                        SymbolicExpression::Expression(pair) if pair.len() >= 2 => {
+                                            match &pair[0] {
+                                                SymbolicExpression::Symbol(name) => {
+                                                    Ok((name.clone(), pair[1].clone()))
+                                                }
+                                                _ => Err(InterpreterError::ArgumentError(
+                                                    "let binding name must be symbol".into(),
+                                                )),
+                                            }
+                                        }
+                                        _ => Err(InterpreterError::ArgumentError(
+                                            "invalid let binding".into(),
+                                        )),
+                                    })
+                                    .collect::<Result<Vec<_>>>()?,
+                                _ => {
+                                    return Err(InterpreterError::ArgumentError(
+                                        "let requires bindings".into(),
+                                    ))
+                                }
+                            };
+                            let body = args[1].clone();
+
+                            if bindings.is_empty() {
+                                // No bindings, just evaluate body
+                                Control::Eval { env, expr: body }
+                            } else {
+                                let mut bindings = bindings;
+                                let (name, val_expr) = bindings.remove(0);
+                                stack.push(Continuation::LetBindings {
+                                    env: env.clone(),
+                                    current_name: name,
+                                    remaining_bindings: bindings,
+                                    body,
+                                });
+                                Control::Eval { env, expr: val_expr }
+                            }
+                        }
+                        SymbolicExpression::Operation(Operation::Begin) => {
+                            env.add_frame();
+                            if args.is_empty() {
+                                env.pop_frame();
+                                Control::ApplyValue(SymbolicExpression::Nil)
+                            } else if args.len() == 1 {
+                                // Single expression - tail position
+                                Control::Eval {
+                                    env,
+                                    expr: args[0].clone(),
+                                }
+                            } else {
+                                let mut exprs = args;
+                                let first = exprs.remove(0);
+                                stack.push(Continuation::BeginExprs {
+                                    env: env.clone(),
+                                    remaining: exprs,
+                                });
+                                Control::Eval { env, expr: first }
+                            }
+                        }
+                        SymbolicExpression::Operation(Operation::Module) => {
+                            if args.is_empty() {
+                                Control::ApplyValue(SymbolicExpression::Nil)
+                            } else {
+                                let mut exprs = args;
+                                let first = exprs.remove(0);
+                                stack.push(Continuation::ModuleExprs {
+                                    env: env.clone(),
+                                    remaining: exprs,
+                                });
+                                Control::Eval { env, expr: first }
+                            }
+                        }
+                        SymbolicExpression::Operation(op) => {
+                            // Regular operation - evaluate all arguments
+                            if args.is_empty() {
+                                let result = apply_operation(*op, vec![])?;
+                                Control::ApplyValue(result)
+                            } else {
+                                let mut remaining = args;
+                                let first = remaining.remove(0);
+                                stack.push(Continuation::OpArgs {
+                                    env: env.clone(),
+                                    op: *op,
+                                    evaluated: vec![],
+                                    remaining,
+                                });
+                                Control::Eval { env, expr: first }
+                            }
+                        }
+                        // Not a special form - evaluate function position first
                         _ => {
-                            return Err(InterpreterError::ArgumentError(
-                                "invalid args for let".to_string(),
-                            ))
+                            stack.push(Continuation::ApplyFunc {
+                                env: env.clone(),
+                                args,
+                            });
+                            Control::Eval {
+                                env,
+                                expr: first.clone(),
+                            }
                         }
-                    };
-                    Result::Ok(())
-                })?
-            } else {
-                panic!("invalid args for let")
+                    }
+                }
+            },
+
+            Control::ApplyValue(value) => {
+                if stack.is_empty() {
+                    return Ok(value);
+                }
+
+                let cont = stack.pop().unwrap();
+                match cont {
+                    Continuation::OpArgs {
+                        env,
+                        op,
+                        mut evaluated,
+                        mut remaining,
+                    } => {
+                        evaluated.push(value);
+                        if remaining.is_empty() {
+                            let result = apply_operation(op, evaluated)?;
+                            Control::ApplyValue(result)
+                        } else {
+                            let next = remaining.remove(0);
+                            stack.push(Continuation::OpArgs {
+                                env: env.clone(),
+                                op,
+                                evaluated,
+                                remaining,
+                            });
+                            Control::Eval { env, expr: next }
+                        }
+                    }
+
+                    Continuation::LambdaArgs {
+                        caller_env,
+                        mut lambda_env,
+                        parameters,
+                        body,
+                        mut evaluated,
+                        mut remaining,
+                    } => {
+                        evaluated.push(value);
+                        if remaining.is_empty() {
+                            // All args evaluated, bind and evaluate body
+                            lambda_env.add_frame();
+                            for (param, val) in parameters.iter().zip(evaluated) {
+                                lambda_env.define_symbol(param, val);
+                            }
+                            // Body is in tail position - no continuation pushed
+                            Control::Eval {
+                                env: lambda_env,
+                                expr: body,
+                            }
+                        } else {
+                            let next = remaining.remove(0);
+                            stack.push(Continuation::LambdaArgs {
+                                caller_env: caller_env.clone(),
+                                lambda_env,
+                                parameters,
+                                body,
+                                evaluated,
+                                remaining,
+                            });
+                            Control::Eval {
+                                env: caller_env,
+                                expr: next,
+                            }
+                        }
+                    }
+
+                    Continuation::ApplyFunc { env, args } => {
+                        // We now have the function value
+                        match value {
+                            SymbolicExpression::Operation(op) => {
+                                // Built-in operation
+                                if args.is_empty() {
+                                    let result = apply_operation(op, vec![])?;
+                                    Control::ApplyValue(result)
+                                } else {
+                                    let mut remaining = args;
+                                    let first = remaining.remove(0);
+                                    stack.push(Continuation::OpArgs {
+                                        env: env.clone(),
+                                        op,
+                                        evaluated: vec![],
+                                        remaining,
+                                    });
+                                    Control::Eval { env, expr: first }
+                                }
+                            }
+                            SymbolicExpression::Lambda {
+                                parameters,
+                                env: lambda_env,
+                                body,
+                            } => {
+                                if args.is_empty() {
+                                    // No args - evaluate body directly
+                                    let mut le = lambda_env;
+                                    le.add_frame();
+                                    Control::Eval {
+                                        env: le,
+                                        expr: (*body).clone(),
+                                    }
+                                } else {
+                                    let mut remaining = args;
+                                    let first = remaining.remove(0);
+                                    stack.push(Continuation::LambdaArgs {
+                                        caller_env: env.clone(),
+                                        lambda_env,
+                                        parameters,
+                                        body: (*body).clone(),
+                                        evaluated: vec![],
+                                        remaining,
+                                    });
+                                    Control::Eval { env, expr: first }
+                                }
+                            }
+                            _ => {
+                                return Err(InterpreterError::SyntaxError(value));
+                            }
+                        }
+                    }
+
+                    Continuation::LetBindings {
+                        mut env,
+                        current_name,
+                        mut remaining_bindings,
+                        body,
+                    } => {
+                        env.define_symbol(&current_name, value);
+                        if remaining_bindings.is_empty() {
+                            // All bindings done, evaluate body (tail position)
+                            Control::Eval { env, expr: body }
+                        } else {
+                            let (name, val_expr) = remaining_bindings.remove(0);
+                            stack.push(Continuation::LetBindings {
+                                env: env.clone(),
+                                current_name: name,
+                                remaining_bindings,
+                                body,
+                            });
+                            Control::Eval {
+                                env,
+                                expr: val_expr,
+                            }
+                        }
+                    }
+
+                    Continuation::BeginExprs { env, mut remaining } => {
+                        // Discard value, continue with remaining
+                        if remaining.is_empty() {
+                            // Shouldn't happen - last expr doesn't push BeginExprs
+                            Control::ApplyValue(value)
+                        } else if remaining.len() == 1 {
+                            // Last expression - tail position
+                            Control::Eval {
+                                env,
+                                expr: remaining.remove(0),
+                            }
+                        } else {
+                            let next = remaining.remove(0);
+                            stack.push(Continuation::BeginExprs {
+                                env: env.clone(),
+                                remaining,
+                            });
+                            Control::Eval { env, expr: next }
+                        }
+                    }
+
+                    Continuation::ModuleExprs { env, mut remaining } => {
+                        if remaining.is_empty() {
+                            Control::ApplyValue(SymbolicExpression::Nil)
+                        } else {
+                            let next = remaining.remove(0);
+                            stack.push(Continuation::ModuleExprs {
+                                env: env.clone(),
+                                remaining,
+                            });
+                            Control::Eval { env, expr: next }
+                        }
+                    }
+
+                    Continuation::Define { mut env, name } => {
+                        env.define_symbol(&name, value);
+                        Control::ApplyValue(SymbolicExpression::Nil)
+                    }
+
+                    Continuation::Set { mut env, name } => {
+                        env.set_symbol(&name, value)?;
+                        Control::ApplyValue(SymbolicExpression::Nil)
+                    }
+
+                    Continuation::IfPredicate {
+                        env,
+                        then_branch,
+                        else_branch,
+                    } => match value {
+                        SymbolicExpression::Bool(true) => Control::Eval {
+                            env,
+                            expr: then_branch,
+                        },
+                        SymbolicExpression::Bool(false) => Control::Eval {
+                            env,
+                            expr: else_branch,
+                        },
+                        _ => Err(InterpreterError::ValueError(
+                            "if predicate must be boolean".into(),
+                        ))?,
+                    },
+
+                    Continuation::CondPredicate {
+                        env,
+                        current_body,
+                        mut remaining_clauses,
+                    } => match value {
+                        SymbolicExpression::Bool(true) => {
+                            // Evaluate body (tail position)
+                            Control::Eval {
+                                env,
+                                expr: current_body,
+                            }
+                        }
+                        SymbolicExpression::Bool(false) => {
+                            if remaining_clauses.is_empty() {
+                                return Err(InterpreterError::RuntimeError(
+                                    "cond: all predicates false".into(),
+                                ));
+                            }
+                            let (pred, body) = remaining_clauses.remove(0);
+                            stack.push(Continuation::CondPredicate {
+                                env: env.clone(),
+                                current_body: body,
+                                remaining_clauses,
+                            });
+                            Control::Eval { env, expr: pred }
+                        }
+                        _ => Err(InterpreterError::ValueError(
+                            "cond predicate must be boolean".into(),
+                        ))?,
+                    },
+                }
             }
-            let result = eval(env, expression_iter.next().unwrap());
-            env.pop_frame();
-            result
-        }
-    }
-}
-
-fn eval_lambda<'a>(
-    env: &mut Env,
-    lambda_env: &mut Env,
-    parameters: &[String],
-    body: &SymbolicExpression,
-    expression_iter: &mut impl DoubleEndedIterator<Item = &'a SymbolicExpression>,
-) -> Result<SymbolicExpression> {
-    lambda_env.add_frame();
-    parameters
-        .iter()
-        .zip(expression_iter)
-        .try_for_each(|(param, expression)| {
-            eval(env, expression).map(|value| lambda_env.define_symbol(param, value))
-        })?;
-
-    let result = eval(lambda_env, body);
-    lambda_env.pop_frame();
-    result
-}
-
-fn eval_expression(env: &mut Env, expression: &[SymbolicExpression]) -> Result<SymbolicExpression> {
-    let mut expression_iter = expression.iter();
-
-    let first_expression = eval(env, expression_iter.next().unwrap())?;
-
-    match first_expression {
-        SymbolicExpression::Operation(operation) => {
-            eval_operation(env, operation, &mut expression_iter)
-        }
-        SymbolicExpression::Lambda {
-            parameters,
-            env: mut lambda_env,
-            body,
-        } => eval_lambda(
-            env,
-            &mut lambda_env,
-            &parameters,
-            &body,
-            &mut expression_iter,
-        ),
-        _ => Err(InterpreterError::SyntaxError(first_expression)),
-    }
-}
-
-pub fn eval(env: &mut Env, expression: &SymbolicExpression) -> Result<SymbolicExpression> {
-    match expression {
-        SymbolicExpression::Symbol(name) => env.find_symbol(name),
-        SymbolicExpression::Expression(expression) => eval_expression(env, expression),
-        value => Ok(value.clone()),
+        };
     }
 }
