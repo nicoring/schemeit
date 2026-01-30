@@ -2,6 +2,7 @@ use crate::env::Env;
 use crate::tokenize::Token;
 use std::collections::VecDeque;
 use std::fmt::Display;
+use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum Operation {
@@ -63,39 +64,24 @@ impl Operation {
     }
 }
 
-/// A cons cell with custom Drop to handle deeply nested lists iteratively.
+/// A cons cell using Rc for O(1) cloning. Custom Drop handles deeply nested lists iteratively.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConsCell {
-    pub head: Box<SymbolicExpression>,
-    pub tail: Box<SymbolicExpression>,
+    pub head: Rc<SymbolicExpression>,
+    pub tail: Rc<SymbolicExpression>,
 }
 
 impl Drop for ConsCell {
     fn drop(&mut self) {
-        use std::mem::ManuallyDrop;
-
         // Iteratively drop the tail chain to prevent stack overflow.
-        // We use ManuallyDrop to prevent recursive Drop calls on inner ConsCells.
-        let mut current = std::mem::replace(&mut self.tail, Box::new(SymbolicExpression::Nil));
+        // Only processes cells where we have the sole reference.
+        let mut current = std::mem::replace(&mut self.tail, Rc::new(SymbolicExpression::Nil));
 
-        loop {
-            // Take the value out of the box
-            let inner = std::mem::replace(&mut *current, SymbolicExpression::Nil);
-
+        while let Ok(inner) = Rc::try_unwrap(current) {
             match inner {
-                SymbolicExpression::Cons(cell) => {
-                    // Wrap in ManuallyDrop to prevent automatic Drop
-                    let cell = ManuallyDrop::new(cell);
-                    // SAFETY: We're manually handling the drop of cell's fields.
-                    // After this, cell is left in an undefined state but won't be dropped.
-                    unsafe {
-                        // Read and drop head
-                        let head = std::ptr::read(&cell.head);
-                        drop(head);
-                        // Read tail for next iteration
-                        current = std::ptr::read(&cell.tail);
-                    }
-                    // cell is ManuallyDrop, so no Drop is triggered
+                SymbolicExpression::Cons(mut cell) => {
+                    // Take tail for next iteration, head drops automatically
+                    current = std::mem::replace(&mut cell.tail, Rc::new(SymbolicExpression::Nil));
                 }
                 _ => break, // Not a Cons, done
             }
@@ -140,7 +126,7 @@ impl Display for SymbolicExpression {
             Self::Float(value) => write!(f, "{}", value),
             Self::Int(value) => write!(f, "{}", value),
             Self::Str(value) => write!(f, "{}", value),
-            Self::Cons(ConsCell { head, tail }) => write!(f, "({} . {})", head, tail),
+            Self::Cons(ConsCell { head, tail }) => write!(f, "({} . {})", **head, **tail),
             Self::Symbol(value) => write!(f, "#{}", value),
             Self::Bool(value) => write!(f, "{}", if *value { "#t" } else { "#f" }),
             Self::Nil => write!(f, "#nil"),

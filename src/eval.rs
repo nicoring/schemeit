@@ -1,3 +1,6 @@
+use std::collections::VecDeque;
+use std::rc::Rc;
+
 use crate::{
     env::Env,
     error::{InterpreterError, Result},
@@ -30,14 +33,17 @@ fn parse_lambda_params(expr: &SymbolicExpression) -> Result<Vec<String>> {
 }
 
 /// Parse let bindings from an expression containing the bindings list
-fn parse_let_bindings(expr: &SymbolicExpression) -> Result<Vec<(String, SymbolicExpression)>> {
+fn parse_let_bindings(expr: SymbolicExpression) -> Result<Vec<(String, SymbolicExpression)>> {
     match expr {
         SymbolicExpression::Expression(bs) => bs
-            .iter()
+            .into_iter()
             .map(|b| match b {
                 SymbolicExpression::Expression(pair) if pair.len() >= 2 => {
-                    let name = extract_symbol(&pair[0], "let binding name must be symbol")?;
-                    Ok((name, pair[1].clone()))
+                    let mut iter = pair.into_iter();
+                    let name_expr = iter.next().unwrap();
+                    let name = extract_symbol(&name_expr, "let binding name must be symbol")?;
+                    let value = iter.next().unwrap();
+                    Ok((name, value))
                 }
                 _ => Err(InterpreterError::ArgumentError("invalid let binding".into())),
             })
@@ -50,12 +56,15 @@ fn parse_let_bindings(expr: &SymbolicExpression) -> Result<Vec<(String, Symbolic
 
 /// Parse cond clauses from the argument expressions
 fn parse_cond_clauses(
-    args: &[SymbolicExpression],
+    args: Vec<SymbolicExpression>,
 ) -> Result<Vec<(SymbolicExpression, SymbolicExpression)>> {
-    args.iter()
+    args.into_iter()
         .map(|arg| match arg {
             SymbolicExpression::Expression(clause) if clause.len() >= 2 => {
-                Ok((clause[0].clone(), clause[1].clone()))
+                let mut iter = clause.into_iter();
+                let pred = iter.next().unwrap();
+                let body = iter.next().unwrap();
+                Ok((pred, body))
             }
             _ => Err(InterpreterError::ArgumentError("invalid cond clause".into())),
         })
@@ -108,7 +117,7 @@ enum Continuation {
         env: Env,
         op: Operation,
         evaluated: Vec<SymbolicExpression>,
-        remaining: Vec<SymbolicExpression>,
+        remaining: VecDeque<SymbolicExpression>,
     },
     /// Evaluating arguments for a lambda call
     LambdaArgs {
@@ -117,29 +126,29 @@ enum Continuation {
         parameters: Vec<String>,
         body: SymbolicExpression,
         evaluated: Vec<SymbolicExpression>,
-        remaining: Vec<SymbolicExpression>,
+        remaining: VecDeque<SymbolicExpression>,
     },
     /// Evaluating the function position of an application
     ApplyFunc {
         env: Env,
-        args: Vec<SymbolicExpression>,
+        args: VecDeque<SymbolicExpression>,
     },
     /// Evaluating let bindings
     LetBindings {
         env: Env,
         current_name: String,
-        remaining_bindings: Vec<(String, SymbolicExpression)>,
+        remaining_bindings: VecDeque<(String, SymbolicExpression)>,
         body: SymbolicExpression,
     },
     /// Evaluating expressions in begin (non-tail)
     BeginExprs {
         env: Env,
-        remaining: Vec<SymbolicExpression>,
+        remaining: VecDeque<SymbolicExpression>,
     },
     /// Evaluating expressions in module
     ModuleExprs {
         env: Env,
-        remaining: Vec<SymbolicExpression>,
+        remaining: VecDeque<SymbolicExpression>,
     },
     /// Define: waiting for value
     Define {
@@ -161,7 +170,7 @@ enum Continuation {
     CondPredicate {
         env: Env,
         current_body: SymbolicExpression,
-        remaining_clauses: Vec<(SymbolicExpression, SymbolicExpression)>,
+        remaining_clauses: VecDeque<(SymbolicExpression, SymbolicExpression)>,
     },
 }
 
@@ -242,8 +251,9 @@ fn apply_operation(op: Operation, args: Vec<SymbolicExpression>) -> Result<Symbo
             }
         }
         Operation::Cons => {
-            let head = Box::new(args[0].clone());
-            let tail = Box::new(args[1].clone());
+            let mut iter = args.into_iter();
+            let head = Rc::new(iter.next().unwrap());
+            let tail = Rc::new(iter.next().unwrap());
             Ok(SymbolicExpression::Cons(ConsCell { head, tail }))
         }
         Operation::List => {
@@ -252,18 +262,20 @@ fn apply_operation(op: Operation, args: Vec<SymbolicExpression>) -> Result<Symbo
                 .rev()
                 .fold(SymbolicExpression::Nil, |acc, elem| {
                     SymbolicExpression::Cons(ConsCell {
-                        head: Box::new(elem),
-                        tail: Box::new(acc),
+                        head: Rc::new(elem),
+                        tail: Rc::new(acc),
                     })
                 });
             Ok(result)
         }
         Operation::Car => match &args[0] {
-            SymbolicExpression::Cons(ConsCell { ref head, .. }) => Ok((**head).clone()),
+            // Cloning SymbolicExpression from Rc: O(1) for Cons (just clones inner Rcs)
+            SymbolicExpression::Cons(ConsCell { head, .. }) => Ok((**head).clone()),
             _ => Err(InterpreterError::ValueError("car on non-cons".into())),
         },
         Operation::Cdr => match &args[0] {
-            SymbolicExpression::Cons(ConsCell { ref tail, .. }) => Ok((**tail).clone()),
+            // Cloning SymbolicExpression from Rc: O(1) for Cons (just clones inner Rcs)
+            SymbolicExpression::Cons(ConsCell { tail, .. }) => Ok((**tail).clone()),
             _ => Err(InterpreterError::ValueError("cdr on non-cons".into())),
         },
         Operation::Eq => Ok(eval_comparison_operation(args, |a, b| a == b)),
@@ -288,16 +300,17 @@ fn apply_operation(op: Operation, args: Vec<SymbolicExpression>) -> Result<Symbo
 // Pure Special Form Handlers (no stack needed)
 // ============================================================================
 
-fn handle_quote(args: Vec<SymbolicExpression>) -> Result<Control> {
-    if args.is_empty() {
-        return Err(InterpreterError::ArgumentError("quote requires argument".into()));
+fn handle_quote(mut args: VecDeque<SymbolicExpression>) -> Result<Control> {
+    match args.pop_front() {
+        Some(expr) => Ok(Control::ApplyValue(expr)),
+        None => Err(InterpreterError::ArgumentError("quote requires argument".into())),
     }
-    Ok(Control::ApplyValue(args[0].clone()))
 }
 
-fn handle_lambda(env: &Env, args: Vec<SymbolicExpression>) -> Result<Control> {
-    let parameters = parse_lambda_params(&args[0])?;
-    let body = args[1].clone();
+fn handle_lambda(env: &Env, mut args: VecDeque<SymbolicExpression>) -> Result<Control> {
+    let params_expr = args.pop_front().unwrap();
+    let parameters = parse_lambda_params(&params_expr)?;
+    let body = args.pop_front().unwrap();
     let lambda_env = env.get_lambda_env();
     Ok(Control::ApplyValue(SymbolicExpression::Lambda {
         parameters,
@@ -344,36 +357,43 @@ impl EvalState {
     // Special Form Handlers
     // ========================================================================
 
-    fn handle_define(&mut self, env: Env, args: Vec<SymbolicExpression>) -> Result<Control> {
-        let name = extract_symbol(&args[0], "define requires symbol")?;
+    fn handle_define(&mut self, env: Env, mut args: VecDeque<SymbolicExpression>) -> Result<Control> {
+        let name_expr = args.pop_front().unwrap();
+        let name = extract_symbol(&name_expr, "define requires symbol")?;
+        let value_expr = args.pop_front().unwrap();
         self.push(Continuation::Define { env: env.clone(), name });
-        Ok(Control::Eval { env, expr: args[1].clone() })
+        Ok(Control::Eval { env, expr: value_expr })
     }
 
-    fn handle_set(&mut self, env: Env, args: Vec<SymbolicExpression>) -> Result<Control> {
-        let name = extract_symbol(&args[0], "set! requires symbol")?;
+    fn handle_set(&mut self, env: Env, mut args: VecDeque<SymbolicExpression>) -> Result<Control> {
+        let name_expr = args.pop_front().unwrap();
+        let name = extract_symbol(&name_expr, "set! requires symbol")?;
+        let value_expr = args.pop_front().unwrap();
         self.push(Continuation::Set { env: env.clone(), name });
-        Ok(Control::Eval { env, expr: args[1].clone() })
+        Ok(Control::Eval { env, expr: value_expr })
     }
 
-    fn handle_if(&mut self, env: Env, args: Vec<SymbolicExpression>) -> Result<Control> {
+    fn handle_if(&mut self, env: Env, mut args: VecDeque<SymbolicExpression>) -> Result<Control> {
         if args.len() < 3 {
             return Err(InterpreterError::ArgumentError("if requires 3 arguments".into()));
         }
+        let predicate = args.pop_front().unwrap();
+        let then_branch = args.pop_front().unwrap();
+        let else_branch = args.pop_front().unwrap();
         self.push(Continuation::IfPredicate {
             env: env.clone(),
-            then_branch: args[1].clone(),
-            else_branch: args[2].clone(),
+            then_branch,
+            else_branch,
         });
-        Ok(Control::Eval { env, expr: args[0].clone() })
+        Ok(Control::Eval { env, expr: predicate })
     }
 
-    fn handle_cond(&mut self, env: Env, args: Vec<SymbolicExpression>) -> Result<Control> {
+    fn handle_cond(&mut self, env: Env, args: VecDeque<SymbolicExpression>) -> Result<Control> {
         if args.is_empty() {
             return Err(InterpreterError::RuntimeError("cond requires clauses".into()));
         }
-        let mut clauses = parse_cond_clauses(&args)?;
-        let (pred, body) = clauses.remove(0);
+        let mut clauses: VecDeque<_> = parse_cond_clauses(args.into())?.into();
+        let (pred, body) = clauses.pop_front().unwrap();
         self.push(Continuation::CondPredicate {
             env: env.clone(),
             current_body: body,
@@ -382,17 +402,17 @@ impl EvalState {
         Ok(Control::Eval { env, expr: pred })
     }
 
-    fn handle_let(&mut self, mut env: Env, args: Vec<SymbolicExpression>) -> Result<Control> {
+    fn handle_let(&mut self, mut env: Env, mut args: VecDeque<SymbolicExpression>) -> Result<Control> {
         env.add_frame();
-        let bindings = parse_let_bindings(&args[0])?;
-        let body = args[1].clone();
+        let bindings_expr = args.pop_front().unwrap();
+        let body = args.pop_front().unwrap();
+        let mut bindings: VecDeque<_> = parse_let_bindings(bindings_expr)?.into();
 
         if bindings.is_empty() {
             return Ok(Control::Eval { env, expr: body });
         }
 
-        let mut bindings = bindings;
-        let (name, val_expr) = bindings.remove(0);
+        let (name, val_expr) = bindings.pop_front().unwrap();
         self.push(Continuation::LetBindings {
             env: env.clone(),
             current_name: name,
@@ -402,28 +422,26 @@ impl EvalState {
         Ok(Control::Eval { env, expr: val_expr })
     }
 
-    fn handle_begin(&mut self, mut env: Env, args: Vec<SymbolicExpression>) -> Control {
+    fn handle_begin(&mut self, mut env: Env, mut args: VecDeque<SymbolicExpression>) -> Control {
         env.add_frame();
         if args.is_empty() {
             env.pop_frame();
             return Control::ApplyValue(SymbolicExpression::Nil);
         }
         if args.len() == 1 {
-            return Control::Eval { env, expr: args[0].clone() };
+            return Control::Eval { env, expr: args.pop_front().unwrap() };
         }
-        let mut exprs = args;
-        let first = exprs.remove(0);
-        self.push(Continuation::BeginExprs { env: env.clone(), remaining: exprs });
+        let first = args.pop_front().unwrap();
+        self.push(Continuation::BeginExprs { env: env.clone(), remaining: args });
         Control::Eval { env, expr: first }
     }
 
-    fn handle_module(&mut self, env: Env, args: Vec<SymbolicExpression>) -> Control {
+    fn handle_module(&mut self, env: Env, mut args: VecDeque<SymbolicExpression>) -> Control {
         if args.is_empty() {
             return Control::ApplyValue(SymbolicExpression::Nil);
         }
-        let mut exprs = args;
-        let first = exprs.remove(0);
-        self.push(Continuation::ModuleExprs { env: env.clone(), remaining: exprs });
+        let first = args.pop_front().unwrap();
+        self.push(Continuation::ModuleExprs { env: env.clone(), remaining: args });
         Control::Eval { env, expr: first }
     }
 
@@ -431,19 +449,18 @@ impl EvalState {
         &mut self,
         env: Env,
         op: Operation,
-        args: Vec<SymbolicExpression>,
+        mut args: VecDeque<SymbolicExpression>,
     ) -> Result<Control> {
         if args.is_empty() {
             let result = apply_operation(op, vec![])?;
             return Ok(Control::ApplyValue(result));
         }
-        let mut remaining = args;
-        let first = remaining.remove(0);
+        let first = args.pop_front().unwrap();
         self.push(Continuation::OpArgs {
             env: env.clone(),
             op,
             evaluated: vec![],
-            remaining,
+            remaining: args,
         });
         Ok(Control::Eval { env, expr: first })
     }
@@ -452,7 +469,7 @@ impl EvalState {
         &mut self,
         env: Env,
         func_expr: SymbolicExpression,
-        args: Vec<SymbolicExpression>,
+        args: VecDeque<SymbolicExpression>,
     ) -> Control {
         self.push(Continuation::ApplyFunc { env: env.clone(), args });
         Control::Eval { env, expr: func_expr }
@@ -467,7 +484,7 @@ impl EvalState {
         env: Env,
         op: Operation,
         mut evaluated: Vec<SymbolicExpression>,
-        mut remaining: Vec<SymbolicExpression>,
+        mut remaining: VecDeque<SymbolicExpression>,
         value: SymbolicExpression,
     ) -> Result<Control> {
         evaluated.push(value);
@@ -475,7 +492,7 @@ impl EvalState {
             let result = apply_operation(op, evaluated)?;
             return Ok(Control::ApplyValue(result));
         }
-        let next = remaining.remove(0);
+        let next = remaining.pop_front().unwrap();
         self.push(Continuation::OpArgs { env: env.clone(), op, evaluated, remaining });
         Ok(Control::Eval { env, expr: next })
     }
@@ -488,7 +505,7 @@ impl EvalState {
         parameters: Vec<String>,
         body: SymbolicExpression,
         mut evaluated: Vec<SymbolicExpression>,
-        mut remaining: Vec<SymbolicExpression>,
+        mut remaining: VecDeque<SymbolicExpression>,
         value: SymbolicExpression,
     ) -> Control {
         evaluated.push(value);
@@ -499,7 +516,7 @@ impl EvalState {
             }
             return Control::Eval { env: lambda_env, expr: body };
         }
-        let next = remaining.remove(0);
+        let next = remaining.pop_front().unwrap();
         self.push(Continuation::LambdaArgs {
             caller_env: caller_env.clone(),
             lambda_env,
@@ -514,7 +531,7 @@ impl EvalState {
     fn apply_func(
         &mut self,
         env: Env,
-        args: Vec<SymbolicExpression>,
+        mut args: VecDeque<SymbolicExpression>,
         func_value: SymbolicExpression,
     ) -> Result<Control> {
         match func_value {
@@ -523,17 +540,16 @@ impl EvalState {
                 if args.is_empty() {
                     let mut le = lambda_env;
                     le.add_frame();
-                    return Ok(Control::Eval { env: le, expr: (*body).clone() });
+                    return Ok(Control::Eval { env: le, expr: *body });
                 }
-                let mut remaining = args;
-                let first = remaining.remove(0);
+                let first = args.pop_front().unwrap();
                 self.push(Continuation::LambdaArgs {
                     caller_env: env.clone(),
                     lambda_env,
                     parameters,
-                    body: (*body).clone(),
+                    body: *body,
                     evaluated: vec![],
-                    remaining,
+                    remaining: args,
                 });
                 Ok(Control::Eval { env, expr: first })
             }
@@ -545,7 +561,7 @@ impl EvalState {
         &mut self,
         mut env: Env,
         current_name: String,
-        mut remaining_bindings: Vec<(String, SymbolicExpression)>,
+        mut remaining_bindings: VecDeque<(String, SymbolicExpression)>,
         body: SymbolicExpression,
         value: SymbolicExpression,
     ) -> Control {
@@ -553,7 +569,7 @@ impl EvalState {
         if remaining_bindings.is_empty() {
             return Control::Eval { env, expr: body };
         }
-        let (name, val_expr) = remaining_bindings.remove(0);
+        let (name, val_expr) = remaining_bindings.pop_front().unwrap();
         self.push(Continuation::LetBindings {
             env: env.clone(),
             current_name: name,
@@ -566,25 +582,25 @@ impl EvalState {
     fn apply_begin_exprs(
         &mut self,
         env: Env,
-        mut remaining: Vec<SymbolicExpression>,
+        mut remaining: VecDeque<SymbolicExpression>,
         value: SymbolicExpression,
     ) -> Control {
         if remaining.is_empty() {
             return Control::ApplyValue(value);
         }
         if remaining.len() == 1 {
-            return Control::Eval { env, expr: remaining.remove(0) };
+            return Control::Eval { env, expr: remaining.pop_front().unwrap() };
         }
-        let next = remaining.remove(0);
+        let next = remaining.pop_front().unwrap();
         self.push(Continuation::BeginExprs { env: env.clone(), remaining });
         Control::Eval { env, expr: next }
     }
 
-    fn apply_module_exprs(&mut self, env: Env, mut remaining: Vec<SymbolicExpression>) -> Control {
+    fn apply_module_exprs(&mut self, env: Env, mut remaining: VecDeque<SymbolicExpression>) -> Control {
         if remaining.is_empty() {
             return Control::ApplyValue(SymbolicExpression::Nil);
         }
-        let next = remaining.remove(0);
+        let next = remaining.pop_front().unwrap();
         self.push(Continuation::ModuleExprs { env: env.clone(), remaining });
         Control::Eval { env, expr: next }
     }
@@ -593,7 +609,7 @@ impl EvalState {
         &mut self,
         env: Env,
         current_body: SymbolicExpression,
-        mut remaining_clauses: Vec<(SymbolicExpression, SymbolicExpression)>,
+        mut remaining_clauses: VecDeque<(SymbolicExpression, SymbolicExpression)>,
         value: SymbolicExpression,
     ) -> Result<Control> {
         match value {
@@ -602,7 +618,7 @@ impl EvalState {
                 if remaining_clauses.is_empty() {
                     return Err(InterpreterError::RuntimeError("cond: all predicates false".into()));
                 }
-                let (pred, body) = remaining_clauses.remove(0);
+                let (pred, body) = remaining_clauses.pop_front().unwrap();
                 self.push(Continuation::CondPredicate {
                     env: env.clone(),
                     current_body: body,
@@ -619,26 +635,25 @@ impl EvalState {
     // ========================================================================
 
     /// Dispatch evaluation of an expression
-    fn eval_expression(&mut self, env: Env, exprs: Vec<SymbolicExpression>) -> Result<Control> {
+    fn eval_expression(&mut self, env: Env, mut exprs: VecDeque<SymbolicExpression>) -> Result<Control> {
         if exprs.is_empty() {
             return Err(InterpreterError::SyntaxError(SymbolicExpression::Nil));
         }
 
-        let first = &exprs[0];
-        let args: Vec<_> = exprs[1..].to_vec();
+        let first = exprs.pop_front().unwrap();
 
         match first {
-            SymbolicExpression::Operation(Operation::Quote) => handle_quote(args),
-            SymbolicExpression::Operation(Operation::Define) => self.handle_define(env, args),
-            SymbolicExpression::Operation(Operation::Set) => self.handle_set(env, args),
-            SymbolicExpression::Operation(Operation::If) => self.handle_if(env, args),
-            SymbolicExpression::Operation(Operation::Cond) => self.handle_cond(env, args),
-            SymbolicExpression::Operation(Operation::Lambda) => handle_lambda(&env, args),
-            SymbolicExpression::Operation(Operation::Let) => self.handle_let(env, args),
-            SymbolicExpression::Operation(Operation::Begin) => Ok(self.handle_begin(env, args)),
-            SymbolicExpression::Operation(Operation::Module) => Ok(self.handle_module(env, args)),
-            SymbolicExpression::Operation(op) => self.handle_builtin_op(env, *op, args),
-            _ => Ok(self.handle_application(env, first.clone(), args)),
+            SymbolicExpression::Operation(Operation::Quote) => handle_quote(exprs),
+            SymbolicExpression::Operation(Operation::Define) => self.handle_define(env, exprs),
+            SymbolicExpression::Operation(Operation::Set) => self.handle_set(env, exprs),
+            SymbolicExpression::Operation(Operation::If) => self.handle_if(env, exprs),
+            SymbolicExpression::Operation(Operation::Cond) => self.handle_cond(env, exprs),
+            SymbolicExpression::Operation(Operation::Lambda) => handle_lambda(&env, exprs),
+            SymbolicExpression::Operation(Operation::Let) => self.handle_let(env, exprs),
+            SymbolicExpression::Operation(Operation::Begin) => Ok(self.handle_begin(env, exprs)),
+            SymbolicExpression::Operation(Operation::Module) => Ok(self.handle_module(env, exprs)),
+            SymbolicExpression::Operation(op) => self.handle_builtin_op(env, op, exprs),
+            _ => Ok(self.handle_application(env, first, exprs)),
         }
     }
 
@@ -716,7 +731,7 @@ pub fn eval(env: &mut Env, expression: &SymbolicExpression) -> Result<SymbolicEx
                 }
 
                 // Expression (function application or special form)
-                SymbolicExpression::Expression(exprs) => interp.eval_expression(env, exprs)?,
+                SymbolicExpression::Expression(exprs) => interp.eval_expression(env, exprs.into())?,
             },
 
             Control::ApplyValue(value) => {

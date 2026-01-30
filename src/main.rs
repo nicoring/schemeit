@@ -45,6 +45,9 @@ fn benchmark() {
         "(reduce + (map (lambda (x) (* x x)) (range 1000)))",
         "(reducei + (map (lambda (x) (* x x)) (range 1000)))",
         "(reducei + (mapi (lambda (x) (* x x)) (range 1000)))",
+        "(reduce + (map (lambda (x) (* x x)) (range 10000)))",
+        "(reducei + (map (lambda (x) (* x x)) (range 10000)))",
+        "(reducei + (mapi (lambda (x) (* x x)) (range 10000)))",
     ];
 
     for code_string in code_strings {
