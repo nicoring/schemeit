@@ -185,4 +185,20 @@ mod tests {
             SymbolicExpression::Int(50005000)
         );
     }
+
+    #[test]
+    fn type_error_in_arithmetic() {
+        let mut interp = Interpreter::new();
+        assert!(interp.eval_str("(+ 1 \"hello\")").is_err());
+        assert!(interp.eval_str("(- 1 \"hello\")").is_err());
+        assert!(interp.eval_str("(* 1 \"hello\")").is_err());
+        assert!(interp.eval_str("(/ 1 \"hello\")").is_err());
+    }
+
+    #[test]
+    fn arity_error_in_math_ops() {
+        let mut interp = Interpreter::new();
+        assert!(interp.eval_str("(exp)").is_err());
+        assert!(interp.eval_str("(pow 2)").is_err());
+    }
 }

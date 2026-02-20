@@ -86,23 +86,28 @@ where
     F: Fn(f64, f64) -> f64,
     G: Fn(i128, i128) -> i128,
 {
-    args.into_iter()
-        .reduce(|acc, elem| match (acc, elem) {
-            (SymbolicExpression::Float(a), SymbolicExpression::Float(b)) => {
-                SymbolicExpression::Float(float_op(a, b))
-            }
-            (SymbolicExpression::Float(a), SymbolicExpression::Int(b)) => {
-                SymbolicExpression::Float(float_op(a, b as f64))
-            }
-            (SymbolicExpression::Int(a), SymbolicExpression::Float(b)) => {
-                SymbolicExpression::Float(float_op(a as f64, b))
-            }
-            (SymbolicExpression::Int(a), SymbolicExpression::Int(b)) => {
-                SymbolicExpression::Int(int_op(a, b))
-            }
-            _ => SymbolicExpression::Nil, // Error case, will be caught
-        })
-        .ok_or_else(|| InterpreterError::ArgumentError(format!("{} requires arguments", op_name)))
+    let mut iter = args.into_iter();
+    let first = iter
+        .next()
+        .ok_or_else(|| InterpreterError::ArgumentError(format!("{} requires arguments", op_name)))?;
+    iter.try_fold(first, |acc, elem| match (acc, elem) {
+        (SymbolicExpression::Float(a), SymbolicExpression::Float(b)) => {
+            Ok(SymbolicExpression::Float(float_op(a, b)))
+        }
+        (SymbolicExpression::Float(a), SymbolicExpression::Int(b)) => {
+            Ok(SymbolicExpression::Float(float_op(a, b as f64)))
+        }
+        (SymbolicExpression::Int(a), SymbolicExpression::Float(b)) => {
+            Ok(SymbolicExpression::Float(float_op(a as f64, b)))
+        }
+        (SymbolicExpression::Int(a), SymbolicExpression::Int(b)) => {
+            Ok(SymbolicExpression::Int(int_op(a, b)))
+        }
+        _ => Err(InterpreterError::ValueError(format!(
+            "{} requires numeric arguments",
+            op_name
+        ))),
+    })
 }
 
 // ============================================================================
@@ -205,30 +210,39 @@ fn apply_operation(op: Operation, args: Vec<SymbolicExpression>) -> Result<Symbo
         Operation::Substract => apply_binary_numeric_op(args, |a, b| a - b, |a, b| a - b, "-"),
         Operation::Multiply => apply_binary_numeric_op(args, |a, b| a * b, |a, b| a * b, "*"),
         // Division always returns float
-        Operation::Divide => args
-            .into_iter()
-            .reduce(|acc, elem| match (acc, elem) {
+        Operation::Divide => {
+            let mut iter = args.into_iter();
+            let first = iter
+                .next()
+                .ok_or_else(|| InterpreterError::ArgumentError("/ requires arguments".into()))?;
+            iter.try_fold(first, |acc, elem| match (acc, elem) {
                 (SymbolicExpression::Float(a), SymbolicExpression::Float(b)) => {
-                    SymbolicExpression::Float(a / b)
+                    Ok(SymbolicExpression::Float(a / b))
                 }
                 (SymbolicExpression::Float(a), SymbolicExpression::Int(b)) => {
-                    SymbolicExpression::Float(a / b as f64)
+                    Ok(SymbolicExpression::Float(a / b as f64))
                 }
                 (SymbolicExpression::Int(a), SymbolicExpression::Float(b)) => {
-                    SymbolicExpression::Float(a as f64 / b)
+                    Ok(SymbolicExpression::Float(a as f64 / b))
                 }
                 (SymbolicExpression::Int(a), SymbolicExpression::Int(b)) => {
-                    SymbolicExpression::Float(a as f64 / b as f64)
+                    Ok(SymbolicExpression::Float(a as f64 / b as f64))
                 }
-                _ => SymbolicExpression::Nil,
+                _ => Err(InterpreterError::ValueError("/ requires numeric arguments".into())),
             })
-            .ok_or_else(|| InterpreterError::ArgumentError("/ requires arguments".into())),
-        Operation::Exp => match &args[0] {
-            SymbolicExpression::Float(v) => Ok(SymbolicExpression::Float(v.exp())),
-            SymbolicExpression::Int(v) => Ok(SymbolicExpression::Float((*v as f64).exp())),
-            _ => Err(InterpreterError::ValueError("exp requires number".into())),
+        }
+        Operation::Exp => match args.into_iter().next() {
+            Some(SymbolicExpression::Float(v)) => Ok(SymbolicExpression::Float(v.exp())),
+            Some(SymbolicExpression::Int(v)) => Ok(SymbolicExpression::Float((v as f64).exp())),
+            Some(_) => Err(InterpreterError::ValueError("exp requires a number".into())),
+            None => Err(InterpreterError::ArgumentError("exp requires 1 argument".into())),
         },
         Operation::Pow => {
+            if args.len() < 2 {
+                return Err(InterpreterError::ArgumentError(
+                    "pow requires 2 arguments".into(),
+                ));
+            }
             let (first, second) = (&args[0], &args[1]);
             match (first, second) {
                 (SymbolicExpression::Float(a), SymbolicExpression::Float(b)) => {
@@ -423,14 +437,13 @@ impl EvalState {
     }
 
     fn handle_begin(&mut self, mut env: Env, mut args: VecDeque<SymbolicExpression>) -> Control {
-        env.add_frame();
         if args.is_empty() {
-            env.pop_frame();
             return Control::ApplyValue(SymbolicExpression::Nil);
         }
         if args.len() == 1 {
             return Control::Eval { env, expr: args.pop_front().unwrap() };
         }
+        env.add_frame();
         let first = args.pop_front().unwrap();
         self.push(Continuation::BeginExprs { env: env.clone(), remaining: args });
         Control::Eval { env, expr: first }

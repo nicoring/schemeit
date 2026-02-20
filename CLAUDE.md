@@ -47,4 +47,4 @@ Classic interpreter pipeline with five modules:
 - **First-class functions**: Lambdas are values that can be passed and returned
 - **Continuation machine**: `eval()` uses explicit `Vec<Continuation>` stack with `Control` enum (`Eval`/`ApplyValue`) - no Rust recursion
 - **TCO**: Tail positions (if/cond branches, let/begin body, lambda body) transition directly to `Control::Eval` without pushing continuations
-- **Iterative Drop**: `ConsCell` uses `ManuallyDrop` and unsafe code to iteratively drop tail chains, preventing stack overflow on large lists
+- **Iterative Drop**: `ConsCell` uses a custom `Drop` impl with `std::mem::replace` + `Rc::try_unwrap` to iteratively drop tail chains (no unsafe code), preventing stack overflow on large lists
