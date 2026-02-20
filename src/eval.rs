@@ -45,7 +45,9 @@ fn parse_let_bindings(expr: SymbolicExpression) -> Result<Vec<(String, SymbolicE
                     let value = iter.next().unwrap();
                     Ok((name, value))
                 }
-                _ => Err(InterpreterError::ArgumentError("invalid let binding".into())),
+                _ => Err(InterpreterError::ArgumentError(
+                    "invalid let binding".into(),
+                )),
             })
             .collect(),
         _ => Err(InterpreterError::ArgumentError(
@@ -66,7 +68,9 @@ fn parse_cond_clauses(
                 let body = iter.next().unwrap();
                 Ok((pred, body))
             }
-            _ => Err(InterpreterError::ArgumentError("invalid cond clause".into())),
+            _ => Err(InterpreterError::ArgumentError(
+                "invalid cond clause".into(),
+            )),
         })
         .collect()
 }
@@ -87,9 +91,9 @@ where
     G: Fn(i128, i128) -> i128,
 {
     let mut iter = args.into_iter();
-    let first = iter
-        .next()
-        .ok_or_else(|| InterpreterError::ArgumentError(format!("{} requires arguments", op_name)))?;
+    let first = iter.next().ok_or_else(|| {
+        InterpreterError::ArgumentError(format!("{} requires arguments", op_name))
+    })?;
     iter.try_fold(first, |acc, elem| match (acc, elem) {
         (SymbolicExpression::Float(a), SymbolicExpression::Float(b)) => {
             Ok(SymbolicExpression::Float(float_op(a, b)))
@@ -156,15 +160,9 @@ enum Continuation {
         remaining: VecDeque<SymbolicExpression>,
     },
     /// Define: waiting for value
-    Define {
-        env: Env,
-        name: String,
-    },
+    Define { env: Env, name: String },
     /// Set!: waiting for value
-    Set {
-        env: Env,
-        name: String,
-    },
+    Set { env: Env, name: String },
     /// If: waiting for predicate
     IfPredicate {
         env: Env,
@@ -228,14 +226,18 @@ fn apply_operation(op: Operation, args: Vec<SymbolicExpression>) -> Result<Symbo
                 (SymbolicExpression::Int(a), SymbolicExpression::Int(b)) => {
                     Ok(SymbolicExpression::Float(a as f64 / b as f64))
                 }
-                _ => Err(InterpreterError::ValueError("/ requires numeric arguments".into())),
+                _ => Err(InterpreterError::ValueError(
+                    "/ requires numeric arguments".into(),
+                )),
             })
         }
         Operation::Exp => match args.into_iter().next() {
             Some(SymbolicExpression::Float(v)) => Ok(SymbolicExpression::Float(v.exp())),
             Some(SymbolicExpression::Int(v)) => Ok(SymbolicExpression::Float((v as f64).exp())),
             Some(_) => Err(InterpreterError::ValueError("exp requires a number".into())),
-            None => Err(InterpreterError::ArgumentError("exp requires 1 argument".into())),
+            None => Err(InterpreterError::ArgumentError(
+                "exp requires 1 argument".into(),
+            )),
         },
         Operation::Pow => {
             if args.len() < 2 {
@@ -317,7 +319,9 @@ fn apply_operation(op: Operation, args: Vec<SymbolicExpression>) -> Result<Symbo
 fn handle_quote(mut args: VecDeque<SymbolicExpression>) -> Result<Control> {
     match args.pop_front() {
         Some(expr) => Ok(Control::ApplyValue(expr)),
-        None => Err(InterpreterError::ArgumentError("quote requires argument".into())),
+        None => Err(InterpreterError::ArgumentError(
+            "quote requires argument".into(),
+        )),
     }
 }
 
@@ -340,9 +344,17 @@ fn apply_if_predicate(
     value: SymbolicExpression,
 ) -> Result<Control> {
     match value {
-        SymbolicExpression::Bool(true) => Ok(Control::Eval { env, expr: then_branch }),
-        SymbolicExpression::Bool(false) => Ok(Control::Eval { env, expr: else_branch }),
-        _ => Err(InterpreterError::ValueError("if predicate must be boolean".into())),
+        SymbolicExpression::Bool(true) => Ok(Control::Eval {
+            env,
+            expr: then_branch,
+        }),
+        SymbolicExpression::Bool(false) => Ok(Control::Eval {
+            env,
+            expr: else_branch,
+        }),
+        _ => Err(InterpreterError::ValueError(
+            "if predicate must be boolean".into(),
+        )),
     }
 }
 
@@ -371,25 +383,43 @@ impl EvalState {
     // Special Form Handlers
     // ========================================================================
 
-    fn handle_define(&mut self, env: Env, mut args: VecDeque<SymbolicExpression>) -> Result<Control> {
+    fn handle_define(
+        &mut self,
+        env: Env,
+        mut args: VecDeque<SymbolicExpression>,
+    ) -> Result<Control> {
         let name_expr = args.pop_front().unwrap();
         let name = extract_symbol(&name_expr, "define requires symbol")?;
         let value_expr = args.pop_front().unwrap();
-        self.push(Continuation::Define { env: env.clone(), name });
-        Ok(Control::Eval { env, expr: value_expr })
+        self.push(Continuation::Define {
+            env: env.clone(),
+            name,
+        });
+        Ok(Control::Eval {
+            env,
+            expr: value_expr,
+        })
     }
 
     fn handle_set(&mut self, env: Env, mut args: VecDeque<SymbolicExpression>) -> Result<Control> {
         let name_expr = args.pop_front().unwrap();
         let name = extract_symbol(&name_expr, "set! requires symbol")?;
         let value_expr = args.pop_front().unwrap();
-        self.push(Continuation::Set { env: env.clone(), name });
-        Ok(Control::Eval { env, expr: value_expr })
+        self.push(Continuation::Set {
+            env: env.clone(),
+            name,
+        });
+        Ok(Control::Eval {
+            env,
+            expr: value_expr,
+        })
     }
 
     fn handle_if(&mut self, env: Env, mut args: VecDeque<SymbolicExpression>) -> Result<Control> {
         if args.len() < 3 {
-            return Err(InterpreterError::ArgumentError("if requires 3 arguments".into()));
+            return Err(InterpreterError::ArgumentError(
+                "if requires 3 arguments".into(),
+            ));
         }
         let predicate = args.pop_front().unwrap();
         let then_branch = args.pop_front().unwrap();
@@ -399,12 +429,17 @@ impl EvalState {
             then_branch,
             else_branch,
         });
-        Ok(Control::Eval { env, expr: predicate })
+        Ok(Control::Eval {
+            env,
+            expr: predicate,
+        })
     }
 
     fn handle_cond(&mut self, env: Env, args: VecDeque<SymbolicExpression>) -> Result<Control> {
         if args.is_empty() {
-            return Err(InterpreterError::RuntimeError("cond requires clauses".into()));
+            return Err(InterpreterError::RuntimeError(
+                "cond requires clauses".into(),
+            ));
         }
         let mut clauses: VecDeque<_> = parse_cond_clauses(args.into())?.into();
         let (pred, body) = clauses.pop_front().unwrap();
@@ -416,7 +451,11 @@ impl EvalState {
         Ok(Control::Eval { env, expr: pred })
     }
 
-    fn handle_let(&mut self, mut env: Env, mut args: VecDeque<SymbolicExpression>) -> Result<Control> {
+    fn handle_let(
+        &mut self,
+        mut env: Env,
+        mut args: VecDeque<SymbolicExpression>,
+    ) -> Result<Control> {
         env.add_frame();
         let bindings_expr = args.pop_front().unwrap();
         let body = args.pop_front().unwrap();
@@ -433,7 +472,10 @@ impl EvalState {
             remaining_bindings: bindings,
             body,
         });
-        Ok(Control::Eval { env, expr: val_expr })
+        Ok(Control::Eval {
+            env,
+            expr: val_expr,
+        })
     }
 
     fn handle_begin(&mut self, mut env: Env, mut args: VecDeque<SymbolicExpression>) -> Control {
@@ -441,11 +483,17 @@ impl EvalState {
             return Control::ApplyValue(SymbolicExpression::Nil);
         }
         if args.len() == 1 {
-            return Control::Eval { env, expr: args.pop_front().unwrap() };
+            return Control::Eval {
+                env,
+                expr: args.pop_front().unwrap(),
+            };
         }
         env.add_frame();
         let first = args.pop_front().unwrap();
-        self.push(Continuation::BeginExprs { env: env.clone(), remaining: args });
+        self.push(Continuation::BeginExprs {
+            env: env.clone(),
+            remaining: args,
+        });
         Control::Eval { env, expr: first }
     }
 
@@ -454,7 +502,10 @@ impl EvalState {
             return Control::ApplyValue(SymbolicExpression::Nil);
         }
         let first = args.pop_front().unwrap();
-        self.push(Continuation::ModuleExprs { env: env.clone(), remaining: args });
+        self.push(Continuation::ModuleExprs {
+            env: env.clone(),
+            remaining: args,
+        });
         Control::Eval { env, expr: first }
     }
 
@@ -484,8 +535,14 @@ impl EvalState {
         func_expr: SymbolicExpression,
         args: VecDeque<SymbolicExpression>,
     ) -> Control {
-        self.push(Continuation::ApplyFunc { env: env.clone(), args });
-        Control::Eval { env, expr: func_expr }
+        self.push(Continuation::ApplyFunc {
+            env: env.clone(),
+            args,
+        });
+        Control::Eval {
+            env,
+            expr: func_expr,
+        }
     }
 
     // ========================================================================
@@ -506,7 +563,12 @@ impl EvalState {
             return Ok(Control::ApplyValue(result));
         }
         let next = remaining.pop_front().unwrap();
-        self.push(Continuation::OpArgs { env: env.clone(), op, evaluated, remaining });
+        self.push(Continuation::OpArgs {
+            env: env.clone(),
+            op,
+            evaluated,
+            remaining,
+        });
         Ok(Control::Eval { env, expr: next })
     }
 
@@ -527,7 +589,10 @@ impl EvalState {
             for (param, val) in parameters.iter().zip(evaluated) {
                 lambda_env.define_symbol(param, val);
             }
-            return Control::Eval { env: lambda_env, expr: body };
+            return Control::Eval {
+                env: lambda_env,
+                expr: body,
+            };
         }
         let next = remaining.pop_front().unwrap();
         self.push(Continuation::LambdaArgs {
@@ -538,7 +603,10 @@ impl EvalState {
             evaluated,
             remaining,
         });
-        Control::Eval { env: caller_env, expr: next }
+        Control::Eval {
+            env: caller_env,
+            expr: next,
+        }
     }
 
     fn apply_func(
@@ -549,11 +617,18 @@ impl EvalState {
     ) -> Result<Control> {
         match func_value {
             SymbolicExpression::Operation(op) => self.handle_builtin_op(env, op, args),
-            SymbolicExpression::Lambda { parameters, env: lambda_env, body } => {
+            SymbolicExpression::Lambda {
+                parameters,
+                env: lambda_env,
+                body,
+            } => {
                 if args.is_empty() {
                     let mut le = lambda_env;
                     le.add_frame();
-                    return Ok(Control::Eval { env: le, expr: *body });
+                    return Ok(Control::Eval {
+                        env: le,
+                        expr: *body,
+                    });
                 }
                 let first = args.pop_front().unwrap();
                 self.push(Continuation::LambdaArgs {
@@ -589,7 +664,10 @@ impl EvalState {
             remaining_bindings,
             body,
         });
-        Control::Eval { env, expr: val_expr }
+        Control::Eval {
+            env,
+            expr: val_expr,
+        }
     }
 
     fn apply_begin_exprs(
@@ -602,19 +680,32 @@ impl EvalState {
             return Control::ApplyValue(value);
         }
         if remaining.len() == 1 {
-            return Control::Eval { env, expr: remaining.pop_front().unwrap() };
+            return Control::Eval {
+                env,
+                expr: remaining.pop_front().unwrap(),
+            };
         }
         let next = remaining.pop_front().unwrap();
-        self.push(Continuation::BeginExprs { env: env.clone(), remaining });
+        self.push(Continuation::BeginExprs {
+            env: env.clone(),
+            remaining,
+        });
         Control::Eval { env, expr: next }
     }
 
-    fn apply_module_exprs(&mut self, env: Env, mut remaining: VecDeque<SymbolicExpression>) -> Control {
+    fn apply_module_exprs(
+        &mut self,
+        env: Env,
+        mut remaining: VecDeque<SymbolicExpression>,
+    ) -> Control {
         if remaining.is_empty() {
             return Control::ApplyValue(SymbolicExpression::Nil);
         }
         let next = remaining.pop_front().unwrap();
-        self.push(Continuation::ModuleExprs { env: env.clone(), remaining });
+        self.push(Continuation::ModuleExprs {
+            env: env.clone(),
+            remaining,
+        });
         Control::Eval { env, expr: next }
     }
 
@@ -626,10 +717,15 @@ impl EvalState {
         value: SymbolicExpression,
     ) -> Result<Control> {
         match value {
-            SymbolicExpression::Bool(true) => Ok(Control::Eval { env, expr: current_body }),
+            SymbolicExpression::Bool(true) => Ok(Control::Eval {
+                env,
+                expr: current_body,
+            }),
             SymbolicExpression::Bool(false) => {
                 if remaining_clauses.is_empty() {
-                    return Err(InterpreterError::RuntimeError("cond: all predicates false".into()));
+                    return Err(InterpreterError::RuntimeError(
+                        "cond: all predicates false".into(),
+                    ));
                 }
                 let (pred, body) = remaining_clauses.pop_front().unwrap();
                 self.push(Continuation::CondPredicate {
@@ -639,7 +735,9 @@ impl EvalState {
                 });
                 Ok(Control::Eval { env, expr: pred })
             }
-            _ => Err(InterpreterError::ValueError("cond predicate must be boolean".into())),
+            _ => Err(InterpreterError::ValueError(
+                "cond predicate must be boolean".into(),
+            )),
         }
     }
 
@@ -648,7 +746,11 @@ impl EvalState {
     // ========================================================================
 
     /// Dispatch evaluation of an expression
-    fn eval_expression(&mut self, env: Env, mut exprs: VecDeque<SymbolicExpression>) -> Result<Control> {
+    fn eval_expression(
+        &mut self,
+        env: Env,
+        mut exprs: VecDeque<SymbolicExpression>,
+    ) -> Result<Control> {
         if exprs.is_empty() {
             return Err(InterpreterError::SyntaxError(SymbolicExpression::Nil));
         }
@@ -677,18 +779,29 @@ impl EvalState {
         value: SymbolicExpression,
     ) -> Result<Control> {
         match cont {
-            Continuation::OpArgs { env, op, evaluated, remaining } => {
-                self.apply_op_args(env, op, evaluated, remaining, value)
-            }
+            Continuation::OpArgs {
+                env,
+                op,
+                evaluated,
+                remaining,
+            } => self.apply_op_args(env, op, evaluated, remaining, value),
             Continuation::LambdaArgs {
-                caller_env, lambda_env, parameters, body, evaluated, remaining,
+                caller_env,
+                lambda_env,
+                parameters,
+                body,
+                evaluated,
+                remaining,
             } => Ok(self.apply_lambda_args(
                 caller_env, lambda_env, parameters, body, evaluated, remaining, value,
             )),
             Continuation::ApplyFunc { env, args } => self.apply_func(env, args, value),
-            Continuation::LetBindings { env, current_name, remaining_bindings, body } => {
-                Ok(self.apply_let_bindings(env, current_name, remaining_bindings, body, value))
-            }
+            Continuation::LetBindings {
+                env,
+                current_name,
+                remaining_bindings,
+                body,
+            } => Ok(self.apply_let_bindings(env, current_name, remaining_bindings, body, value)),
             Continuation::BeginExprs { env, remaining } => {
                 Ok(self.apply_begin_exprs(env, remaining, value))
             }
@@ -703,12 +816,16 @@ impl EvalState {
                 env.set_symbol(&name, value)?;
                 Ok(Control::ApplyValue(SymbolicExpression::Nil))
             }
-            Continuation::IfPredicate { env, then_branch, else_branch } => {
-                apply_if_predicate(env, then_branch, else_branch, value)
-            }
-            Continuation::CondPredicate { env, current_body, remaining_clauses } => {
-                self.apply_cond_predicate(env, current_body, remaining_clauses, value)
-            }
+            Continuation::IfPredicate {
+                env,
+                then_branch,
+                else_branch,
+            } => apply_if_predicate(env, then_branch, else_branch, value),
+            Continuation::CondPredicate {
+                env,
+                current_body,
+                remaining_clauses,
+            } => self.apply_cond_predicate(env, current_body, remaining_clauses, value),
         }
     }
 }
@@ -739,12 +856,12 @@ pub fn eval(env: &mut Env, expression: &SymbolicExpression) -> Result<SymbolicEx
                 | SymbolicExpression::Operation(_) => Control::ApplyValue(expr),
 
                 // Symbol lookup
-                SymbolicExpression::Symbol(name) => {
-                    Control::ApplyValue(env.find_symbol(&name)?)
-                }
+                SymbolicExpression::Symbol(name) => Control::ApplyValue(env.find_symbol(&name)?),
 
                 // Expression (function application or special form)
-                SymbolicExpression::Expression(exprs) => interp.eval_expression(env, exprs.into())?,
+                SymbolicExpression::Expression(exprs) => {
+                    interp.eval_expression(env, exprs.into())?
+                }
             },
 
             Control::ApplyValue(value) => {
