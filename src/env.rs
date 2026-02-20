@@ -19,9 +19,6 @@ pub struct Env {
     current_frame: FrameLink,
 }
 
-#[derive(Debug, Clone)]
-pub struct VariableNotFoundError;
-
 impl Frame {
     fn new() -> Self {
         Self {
@@ -81,13 +78,6 @@ impl Env {
         self.current_frame = Rc::new(RefCell::new(new_frame));
     }
 
-    pub fn pop_frame(&mut self) {
-        let new_current_frame = self.current_frame.borrow().outer.clone().expect(
-            "should have outer frame, seems like you are trying to remove the global frame",
-        );
-        self.current_frame = new_current_frame;
-    }
-
     pub fn get_lambda_env(&self) -> Env {
         let new_frame = Frame::with_outer(self.current_frame.clone());
         Env::with_frame(new_frame)
@@ -139,38 +129,42 @@ mod tests {
 
     #[test]
     fn multiple_frames() -> Result<()> {
+        // Models how the evaluator works: inner scopes are clones with an extra frame,
+        // not explicit push/pop on the same Env.
         let mut env = Env::new();
         let a = "a";
         let b = "b";
         let c = "c";
 
         env.define_symbol(a, SE::Nil);
-        assert_eq!(env.find_symbol(a)?, SE::Nil);
-
         env.define_symbol(b, SE::Str("b1".to_string()));
-        assert_eq!(env.find_symbol(b)?, SE::Str("b1".to_string()));
 
-        env.add_frame();
+        {
+            let mut inner = env.clone();
+            inner.add_frame();
 
-        env.define_symbol(a, SE::Int(2));
-        assert_eq!(env.find_symbol(a)?, SE::Int(2));
+            inner.define_symbol(a, SE::Int(2));
+            inner.set_symbol(b, SE::Str("b2".to_string()))?;
+            inner.define_symbol(c, SE::Str("c".to_string()));
 
-        env.set_symbol(b, SE::Str("b2".to_string()))?;
-        assert_eq!(env.find_symbol(b)?, SE::Str("b2".to_string()));
+            assert_eq!(inner.find_symbol(a)?, SE::Int(2));
+            assert_eq!(inner.find_symbol(b)?, SE::Str("b2".to_string()));
+            assert_eq!(inner.find_symbol(c)?, SE::Str("c".to_string()));
+        } // inner dropped here — its frame disappears
 
-        env.define_symbol(c, SE::Str("c".to_string()));
-        assert_eq!(env.find_symbol(c)?, SE::Str("c".to_string()));
-
-        env.pop_frame();
-
+        // define_symbol(a) in inner went to inner's new frame, so outer still sees Nil
         assert_eq!(env.find_symbol(a)?, SE::Nil);
+        // set_symbol(b) mutated the shared outer frame, so outer sees the new value
         assert_eq!(env.find_symbol(b)?, SE::Str("b2".to_string()));
+        // c was only in inner's frame, now gone
         assert!(env.find_symbol(c).is_err());
         Ok(())
     }
 
     #[test]
     fn lambda_env() -> Result<()> {
+        // Lambda captures the env at definition time. Changes via set! are shared
+        // (Rc), but the lambda's frame outlives the creating scope.
         let mut env = Env::new();
         let a = "a";
 
@@ -180,13 +174,14 @@ mod tests {
         let mut lambda_env = env.get_lambda_env();
         assert_eq!(lambda_env.find_symbol(a)?, SE::Int(1));
 
+        // set! mutates the shared frame
         lambda_env.set_symbol(a, SE::Int(2))?;
         assert_eq!(lambda_env.find_symbol(a)?, SE::Int(2));
         assert_eq!(env.find_symbol(a)?, SE::Int(2));
 
-        env.pop_frame();
+        // Drop the creating env; lambda_env keeps the captured frame alive via Rc
+        drop(env);
         assert_eq!(lambda_env.find_symbol(a)?, SE::Int(2));
-        assert!(env.find_symbol(a).is_err());
         Ok(())
     }
 }

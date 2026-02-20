@@ -2,8 +2,9 @@ use crate::env::Env;
 use crate::tokenize::Token;
 use std::collections::VecDeque;
 use std::fmt::Display;
+use std::rc::Rc;
 
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum Operation {
     Add,
     Substract,
@@ -63,6 +64,31 @@ impl Operation {
     }
 }
 
+/// A cons cell using Rc for O(1) cloning. Custom Drop handles deeply nested lists iteratively.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConsCell {
+    pub head: Rc<SymbolicExpression>,
+    pub tail: Rc<SymbolicExpression>,
+}
+
+impl Drop for ConsCell {
+    fn drop(&mut self) {
+        // Iteratively drop the tail chain to prevent stack overflow.
+        // Only processes cells where we have the sole reference.
+        let mut current = std::mem::replace(&mut self.tail, Rc::new(SymbolicExpression::Nil));
+
+        while let Ok(inner) = Rc::try_unwrap(current) {
+            match inner {
+                SymbolicExpression::Cons(mut cell) => {
+                    // Take tail for next iteration, head drops automatically
+                    current = std::mem::replace(&mut cell.tail, Rc::new(SymbolicExpression::Nil));
+                }
+                _ => break, // Not a Cons, done
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SymbolicExpression {
     Str(String),
@@ -70,10 +96,7 @@ pub enum SymbolicExpression {
     Float(f64),
     Int(i128),
     Bool(bool),
-    Cons {
-        head: Box<SymbolicExpression>,
-        tail: Box<SymbolicExpression>,
-    },
+    Cons(ConsCell),
     Nil,
     Expression(Vec<SymbolicExpression>),
     Lambda {
@@ -103,7 +126,7 @@ impl Display for SymbolicExpression {
             Self::Float(value) => write!(f, "{}", value),
             Self::Int(value) => write!(f, "{}", value),
             Self::Str(value) => write!(f, "{}", value),
-            Self::Cons { head, tail } => write!(f, "({} . {})", head, tail),
+            Self::Cons(ConsCell { head, tail }) => write!(f, "({} . {})", **head, **tail),
             Self::Symbol(value) => write!(f, "#{}", value),
             Self::Bool(value) => write!(f, "{}", if *value { "#t" } else { "#f" }),
             Self::Nil => write!(f, "#nil"),

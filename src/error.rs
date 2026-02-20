@@ -1,5 +1,6 @@
 use std::error;
 use std::fmt;
+use std::io;
 
 use crate::parse::SymbolicExpression;
 
@@ -12,6 +13,13 @@ pub enum InterpreterError {
     RuntimeError(String),
     ValueError(String),
     ArgumentError(String),
+    IoError(io::Error),
+}
+
+impl From<io::Error> for InterpreterError {
+    fn from(err: io::Error) -> Self {
+        InterpreterError::IoError(err)
+    }
 }
 
 impl fmt::Display for InterpreterError {
@@ -24,6 +32,7 @@ impl fmt::Display for InterpreterError {
             Self::RuntimeError(explanation) => write!(f, "RuntimeError: {}", explanation),
             Self::ValueError(explanation) => write!(f, "ValueError: {}", explanation),
             Self::ArgumentError(explanation) => write!(f, "ArgumentError: {}", explanation),
+            Self::IoError(err) => write!(f, "IoError: {}", err),
         }
     }
 }
