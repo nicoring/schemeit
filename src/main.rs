@@ -102,7 +102,9 @@ mod tests {
     fn simple_define_function() {
         let mut interp = Interpreter::new();
         interp.eval_str("(define pi 3.141592653)").unwrap();
-        interp.eval_str("(define circle-area (lambda (r) (* pi (* r r))))").unwrap();
+        interp
+            .eval_str("(define circle-area (lambda (r) (* pi (* r r))))")
+            .unwrap();
         assert_eq!(
             interp.eval_str("(circle-area 3)").unwrap(),
             SymbolicExpression::Float(28.274333877)
@@ -165,20 +167,18 @@ mod tests {
     fn test_let() {
         let code = "(let ((a 5) (b (+ 5 a))) (+ a b))";
         let mut interp = Interpreter::new();
-        assert_eq!(
-            interp.eval_str(code).unwrap(),
-            SymbolicExpression::Int(15)
-        );
+        assert_eq!(interp.eval_str(code).unwrap(), SymbolicExpression::Int(15));
     }
 
     #[test]
     fn tail_recursive_sum() {
         let mut interp = Interpreter::new();
         // Define tail-recursive sum: sum-iter(n, acc) = if n==0 then acc else sum-iter(n-1, acc+n)
-        interp.eval_str(
-            "(define sum-iter (lambda (n acc) (if (= n 0) acc (sum-iter (- n 1) (+ acc n)))))",
-        )
-        .unwrap();
+        interp
+            .eval_str(
+                "(define sum-iter (lambda (n acc) (if (= n 0) acc (sum-iter (- n 1) (+ acc n)))))",
+            )
+            .unwrap();
         // This would stack overflow without TCO
         assert_eq!(
             interp.eval_str("(sum-iter 10000 0)").unwrap(),
